@@ -1,0 +1,26 @@
+# mt001_agent 运行配置
+# ⚠ 不要把 API Key 写在这里，它走 .env 或环境变量（见 README）
+
+# ---- LLM（任何 OpenAI 兼容接口都行）----
+# DeepSeek:  https://api.deepseek.com/v1        deepseek-chat
+# 通义千问:  https://dashscope.aliyuncs.com/compatible-mode/v1   qwen-plus
+# 智谱:      https://open.bigmodel.cn/api/paas/v4  glm-4-plus
+llm_base_url: "https://api.deepseek.com/v1"
+llm_model: "deepseek-chat"
+llm_temperature: 0.0
+llm_timeout_sec: 60.0
+
+# ---- 导航闭环参数 ----
+# bridge 侧硬上限：linear 0.20 m/s、angular 0.35 rad/s、单条指令 2.0 s
+# 这里设得比上限小一点，留余量；超了 bridge 会静默夹紧
+nav_position_tolerance: 0.15
+nav_yaw_tolerance: 0.12
+nav_tick_duration: 0.6
+nav_max_linear: 0.18
+nav_max_angular: 0.30
+nav_timeout_sec: 90.0
+nav_stall_ticks: 3
+
+# ---- 场景 ----
+# 留空则自动查找 arachne_showroom.sdf；也可以用 ARACHNE_WORLD 环境变量指定
+world_path: ""

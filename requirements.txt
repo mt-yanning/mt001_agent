@@ -1,0 +1,7 @@
+# v0.1 刻意不引入第三方依赖：
+#   · LLM 调用用标准库 urllib，不装 openai / requests
+#   · 配置解析用 PyYAML，ROS2 Humble 环境自带；没有也能跑（回落到默认值）
+#   · rclpy / numpy 由 ROS2 环境提供，不在这里 pip 装
+#
+# 也就是说：source 过 Arachne 的 install/setup.bash 之后，直接就能跑。
+# 这里留空是有意为之，v0.5 接视觉时再加。

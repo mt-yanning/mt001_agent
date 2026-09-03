@@ -1,0 +1,2725 @@
+================================================================================
+                    Arachne 项目完整架构说明
+                （面向「自建 Agent 框架控制机器人」任务）
+================================================================================
+
+生成日期：2026-07-24
+生成方式：遍历阅读 ~/github仓库/robot/Arachne 全部目录与关键源码
+仓库规模：1140 个文件 / 12 个自研 ROS2 包 + 若干第三方包
+目标读者：ROS2 与机器人开发零基础的研究生（本项目作者 mt）
+
+阅读建议：
+  · 第一次读，只看【第一章】【第五章】【第八章】【第九章】即可动手
+  · 【第五章】agent_bridge 是你的正门，要精读
+  · 【第七章】autopick 是你要替换的靶子，要理解它的缺陷
+  · 其余章节当作字典，需要时再查
+
+
+================================================================================
+第一章  整体目录树概览
+================================================================================
+
+Arachne/
+├── README.md ................... 项目说明（偏简略，很多关键信息没写）
+├── AGENTS.md ................... ★写给 AI 编程助手的规范，含安全红线
+├── LICENSE ..................... MIT
+├── .gitignore
+├── .env.local.example .......... 远程规划器（MoveIt 卸载到服务器）环境变量模板
+├── .github/workflows/static-check.yml ... CI：只做语法检查，不跑 ROS
+├── .vscode/ .................... 编辑器配置（可忽略）
+│
+├── config/ ..................... ★仓库级配置（非 ROS 包内配置）
+│   ├── agent/
+│   │   ├── tools.yaml .......... ★Agent 工具清单（文档用，与代码同步）
+│   │   └── agent.example.env ... ★LLM API Key 模板
+│   └── real_road_demo_grasp.yaml  真机道路清扫抓取参数
+│
+├── docs/
+│   ├── demo/arachne.png、realbot.PNG ... 渲染图与真机照片
+│   └── step_demo_plan.md ....... ★中文重构规划，暴露了很多真实痛点
+│
+├── godot/arachne_showcase/ ..... Godot 4 展示（与 ROS 无实际连接）
+│
+├── recordings/teach/ ........... 真机示教录制的 JSON 轨迹（9 个）
+│
+├── scripts/ .................... shell 辅助脚本（作者声明"非稳定接口"）
+│   ├── agent/agent_bridge.sh ... ★一行启动 agent_bridge
+│   ├── build/ .................. 编译与环境安装（5 个）
+│   ├── env/ .................... ★环境变量脚本（含 conda 隔离逻辑）
+│   ├── godot/ .................. Godot 展示相关（5 个）
+│   ├── hardware/ ............... 真机脚本（29 个，全部真机专用）
+│   ├── model/ .................. URDF 模型检查与查看（5 个）
+│   ├── operator/ ............... 示教面板桌面快捷方式
+│   ├── remote/ ................. ★MoveIt 规划卸载到远程服务器（6 个）
+│   ├── sim/ .................... ★仿真启动脚本（5 个）
+│   └── vision/ ................. YOLO / AprilTag / 相机（15 个）
+│
+├── src/ ........................ ★★★ ROS2 工作空间，12 个自研包
+│   ├── arachne_agent_bridge/ ... ★★★ Agent 接入正门
+│   ├── arachne_control/ ........ ros2_control 配置（占位性质，未真正启用）
+│   ├── arachne_demo/ ........... ★★ Gazebo 演示 + 写死的自动抓取规划器
+│   ├── arachne_description/ .... ★ URDF/xacro 机器人模型（含 Gazebo 插件）
+│   ├── arachne_gazebo/ ......... ★ C++ 的 ROS↔Gazebo 桥接节点（2 个）
+│   ├── arachne_gripper/ ........ 夹爪仿真控制与 GUI
+│   ├── arachne_hardware/ ....... ★ 真机驱动 + ★★mock 假硬件
+│   ├── arachne_moveit_config/ .. MoveIt2 规划配置
+│   ├── arachne_nav/ ............ Nav2 导航配置（起步阶段）
+│   ├── arachne_operator/ ....... ★★ 最大的包，21798 行，面板+任务服务器
+│   ├── arachne_sensors/ ........ Gemini335 相机节点
+│   ├── arachne_sim/ ............ ★ RViz 轻量仿真 + 城市垃圾分拣 demo
+│   └── vendor/ ................. 空壳占位包
+│
+├── third_party/ ................ 第三方依赖（详见第十章）
+│   ├── aubo_description/ ....... Aubo i5 机械臂 URDF
+│   ├── aubo_ros2_driver/ ....... Aubo 官方 ROS2 驱动
+│   ├── dh_ag95_gripper_ros2/ ... DH AG95 夹爪（备选夹爪）
+│   ├── scout_ros/ .............. Scout 底盘 ROS1 遗留
+│   ├── scout_ros2/ ............. ★ Scout 2.0 底盘 ROS2 驱动 + URDF
+│   ├── ugv_sdk/ ................ ★ 松灵底盘 C++ SDK（CAN/串口协议）
+│   ├── ms42dc_step_motor_ros2/   MS42DC 夹爪步进电机驱动
+│   ├── MS42DC_SPLIT/ ........... 夹爪 STL 拆件模型
+│   ├── MS42DC.step ............. 夹爪原始 CAD
+│   ├── LARA_AUBOi5_AG95/ ....... 另一套组合的模型资产
+│   └── kenney/ ................. 免费素材（Godot 用）
+│
+└── yolo_workspace/ ............. YOLO 视觉工作区
+    ├── weights/yolo26n_seg_taco_best.pt  ← 已训练的垃圾分割模型
+    ├── configs/trash_mvp.yaml
+    └── calibration/ datasets/ engines/ runs/  （空目录占位）
+
+
+================================================================================
+第二章  顶层文件与目录逐个说明（含相关度评级）
+================================================================================
+
+【图例】
+  相关度：高 = 直接影响 Agent 开发  中 = 需要时查阅  低 = 可长期忽略
+  优先级：P0 = 立刻读  P1 = 第一周内读  P2 = 有空再读  P3 = 不用读
+
+--------------------------------------------------------------------------------
+▶ AGENTS.md                                    相关度：高   优先级：P0
+--------------------------------------------------------------------------------
+  作用：Arachne 作者写给「未来在此仓库工作的 AI 助手」的行为规范。
+  角色：它不是代码，但定义了这个项目的工程价值观与安全底线。
+
+  对你最重要的四条红线（原文在 Prohibited 一节）：
+    1. 不要把真机运动放在默认路径上，必须有显式的 enable/confirm 参数
+       → 这解释了 agent_bridge 为什么默认 motion_enabled=false
+    2. 不要绕过 Aubo 控制归属（control ownership）与示教模式门控
+       → 机械臂同一时刻只能有一个"主人"，抢控制权会出事
+    3. 不要提交密钥、日志、编译产物
+    4. 不要跑长时间真机测试，除非用户明确确认机器人已就位
+
+  它还定义了「完成标准」：改动要最小、正常入口仍是 teach_panel.launch.py、
+  dry-run 路径绝不碰真硬件、提交前要看 git status --short。
+
+  ⚠ 注意：这份文件是给「在 Arachne 仓库里改代码的人」看的。你是在
+     mt001_agent/ 里写自己的代码，不改 Arachne，所以主要吸收它的安全思想
+     而非字面约束。
+
+--------------------------------------------------------------------------------
+▶ README.md                                    相关度：中   优先级：P1
+--------------------------------------------------------------------------------
+  作用：项目门面。介绍硬件构成、编译方式、正常操作入口、维护检查命令。
+
+  它写清楚的：
+    · 编译三步：source scripts/env/arachne_env.sh →
+      ./scripts/build/build_workspace.sh → source install/setup.bash
+    · 正常入口：ros2 launch arachne_operator teach_panel.launch.py
+    · 5 条无硬件维护检查命令（--headless-check / --dry-run-check）
+
+  ⚠ 它完全没写的（这些正是你需要的）：
+    · Gazebo 仿真怎么启动、需要什么依赖  ← 见【第四章】【第九章】
+    · agent_bridge 存在且是 Agent 官方入口  ← 见【第五章】
+    · mock 假硬件模式怎么用  ← 见【第八章】
+    · 仿真与真机的话题不通用  ← 见【第六章】
+
+--------------------------------------------------------------------------------
+▶ config/agent/                                相关度：极高  优先级：P0
+--------------------------------------------------------------------------------
+  ★★★ 这个目录是「作者已经为 Agent 预留好位置」的铁证。
+
+  ▪ tools.yaml
+      内容：10 个工具的名字 + danger 等级 + 一句话描述。
+      文件开头注释明确说："本文件是给外部 agent 的文档/配置；ROS 节点
+      在 /arachne/agent/tools 上发布同样的工具面。"
+      → 你既可以离线读这个 yaml，也可以在线订阅话题，二者等价。
+
+      danger 分级（现成的安全语义，建议你的 Agent 直接沿用）：
+        read_only   → get_robot_state
+        stop        → safe_stop、arm_stop
+        motion      → base_velocity、base_relative、base_turn、
+                      arm_cartesian_jog、arm_joint_jog、gripper
+        mode_change → aubo_teach
+
+  ▪ agent.example.env
+      内容：OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY 三个占位，
+            外加 ARACHNE_AGENT_MODEL / BASE_URL / LOG_LEVEL。
+      关键注释："Provider keys are used by the external agent process,
+                not by arachne_agent_bridge."
+      → 翻译：桥不碰 API Key，Key 归你的 Agent 进程管。
+      → 推荐路径：~/.config/arachne/agent.env，权限 chmod 600。
+
+      ★ 对你的启示：作者设想的架构正是「LLM 大脑在 ROS 之外，通过 JSON
+        话题与 ROS 通信」。你的 mt001_agent 完全可以是一个纯 Python 进程，
+        不必是 ROS 包（虽然用 rclpy 收发话题最方便）。
+
+--------------------------------------------------------------------------------
+▶ config/real_road_demo_grasp.yaml             相关度：低   优先级：P3
+--------------------------------------------------------------------------------
+  真机道路清扫演示的抓取参数。纯真机，仿真用不到。
+
+--------------------------------------------------------------------------------
+▶ docs/step_demo_plan.md                       相关度：高   优先级：P1
+--------------------------------------------------------------------------------
+  ★ 中文写的重构规划文档，是整个仓库信息密度最高的文档之一。
+  角色：它诚实地暴露了这套系统的真实短板，对你设计 Agent 极有参考价值。
+
+  它承认的问题（几乎每一条都是你的 Agent 可以做得更好的地方）：
+    · Step Demo 选目标只按 confidence 和 base_x，绕开了最新的 label、
+      mask、depth、ROI、reach、IK、collision 和 waypoint 逻辑
+    · Step Demo 决策的候选，不一定是 grasp_task_server 实际会抓的候选
+      （两个模块各判各的，不同步）
+    · 调 /arachne/grasp_task/start 时没有传递或锁定 candidate id / target token
+    · 深度相机点云坐标可能存在相机外参/TF 根因问题，不只是精度问题；
+      如果 base_grasp_xyz 的坐标系链路错了，approach / too_far 判断
+      和最终抓取都会被连带放大
+    · 当前主要使用 topdown 抓取和锁定姿态，对瓶罐盒状物是低风险默认策略，
+      但不能长期假设所有物体都适合从正上方抓
+
+  ★ 你的 Agent 天然能解决前三条：LLM 大脑统一做目标选择与决策，把
+    candidate id 明确传下去，消除"两个模块各判各的"的不一致。
+    这可以直接写进你的开源项目动机与论文里。
+
+--------------------------------------------------------------------------------
+▶ scripts/                                     相关度：中   优先级：P1
+--------------------------------------------------------------------------------
+  ⚠ 重要前提：每个 .sh 文件开头都有这行注释——
+     "Arachne helper only; not a stable runtime entrypoint."
+     作者的意思是：这些脚本随时可能改，别把它们当 API 依赖。
+     正确做法是学它们内部调用的 `ros2 launch ...` 命令，直接用 ros2 命令。
+
+  ▪ scripts/env/                               相关度：高   优先级：P0
+      arachne_env.sh ....... ★核心环境脚本，必须 source 而非执行
+      ros_env.sh ........... ROS 发行版自动探测（jammy→humble，noble→jazzy）
+      load_local_env.sh .... 加载 .env.local
+      arachne_real_defaults.sh  真机默认参数
+
+      ★★ arachne_env.sh 做的事（与你 CLAUDE.md 里记的 AutoDL 三条命令
+         高度相关）：
+        1. 从 PATH 和 PYTHONPATH 里剔除所有 .venv / venv / miniconda /
+           anaconda / .conda / .pyenv 路径
+           → 这正是解决你遇到过的 "No module named catkin_pkg" 的官方做法
+        2. unset PYTHONHOME、VIRTUAL_ENV，设 PYTHONNOUSERSITE=1
+        3. 强制 ARACHNE_SYSTEM_PYTHON=/usr/bin/python3
+        4. 设 FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+           （注释说明：FastDDS 共享内存传输会在 Jetson 上留下陈旧锁文件，
+             导致 lifecycle 服务调用失败）
+        5. source /opt/ros/$ROS_DISTRO/setup.bash 和 install/setup.bash
+
+      ★ 结论：在 AutoDL 上，你可以直接
+        `source /root/autodl-tmp/Arachne/scripts/env/arachne_env.sh`
+        一条命令替代你现在记的三条。它做的事更全（还处理了 PYTHONPATH
+        和 FastDDS）。建议验证后更新你的工作流。
+
+  ▪ scripts/build/                             相关度：中   优先级：P1
+      build_workspace.sh ... 全量编译
+      build_selected.sh .... 选择性编译单个包（改代码后用这个更快）
+      check_workspace.sh ... 编译前检查
+      setup_ubuntu.sh ...... x86 Ubuntu 依赖安装  ← AutoDL 用这个
+      setup_jetson_humble.sh  Jetson 依赖安装
+
+  ▪ scripts/sim/                               相关度：极高  优先级：P0
+      gazebo_autopick_demo.sh ..... ★启动 Gazebo 自动抓取演示
+      switch_demo.sh .............. ★手柄遥控演示（rviz / gazebo 双模式）
+      moveit_grasp_planning_demo.sh  MoveIt 抓取规划演示（RViz，无 Gazebo）
+      urban_trash_sorting_demo.sh .. 城市垃圾分拣演示（RViz，无 Gazebo）
+      test_gripper_sim.sh ......... 夹爪仿真配置校验（纯文件检查，秒级）
+
+      ★ 这几个脚本里藏着 README 没写的 WSL 显卡适配逻辑：
+        检测 /proc/sys/kernel/osrelease 含 microsoft/wsl 则设置
+        LD_LIBRARY_PATH=/usr/lib/wsl/lib、GALLIUM_DRIVER=d3d12。
+        → 说明作者主要在 WSL 上开发仿真。AutoDL 是原生 Linux，不触发这段。
+
+  ▪ scripts/agent/agent_bridge.sh              相关度：高   优先级：P1
+      内容极简：source 环境 → cd 到根目录 → exec ros2 launch
+      arachne_agent_bridge agent_bridge.launch.py "$@"
+      ★ "$@" 表示它透传所有参数，所以可以：
+        ./scripts/agent/agent_bridge.sh motion_enabled:=true
+
+  ▪ scripts/hardware/                          相关度：低   优先级：P3
+      29 个脚本，全部是真机操作（Aubo 上电、底盘串口、夹爪标定、
+      验收测试、急停）。你在仿真阶段一个都用不到。
+      唯一值得看一眼的：stop_real_stack.sh（怎么优雅停掉整套系统）
+
+  ▪ scripts/remote/                            相关度：中   优先级：P2
+      ★ 一个有意思的设计：把 MoveIt2 规划计算卸载到远程服务器。
+      remote_moveit_planner_server.py  服务端（跑在算力强的机器上）
+      remote_planner_client.py ......... 客户端（跑在机器人上）
+      sync_remote_planner.sh / deploy_remote_planner.sh
+
+      ★ 对你的启示：如果你的 LLM Agent 也需要算力，这套「本地机器人 +
+        远程大脑」的模式是现成的参考架构。你的 AutoDL 服务器天然适合
+        当这个远程端。
+
+  ▪ scripts/vision/                            相关度：中   优先级：P2
+      YOLO 权重下载、TensorRT 引擎导出、AprilTag 手眼标定、Gemini 相机测试。
+      其中 mock_road_cleanup_task_test.py 是无硬件的视觉任务测试，
+      grasp_pose_dry_timing.py 是抓取位姿计算的干跑计时。
+
+  ▪ scripts/model/                             相关度：中   优先级：P2
+      view_model.sh ...... ★在 RViz 里查看机器人 URDF 模型（无需 Gazebo，
+                            无需硬件，是最轻的可视化验证手段）
+      check_model.sh ..... URDF 语法检查
+      check_tf.sh ........ TF 树检查
+      use_gripper.sh ..... 切换夹爪型号（ms42dc / ag95）
+
+  ▪ scripts/godot/ 、scripts/operator/         相关度：低   优先级：P3
+
+--------------------------------------------------------------------------------
+▶ godot/                                       相关度：低   优先级：P3
+--------------------------------------------------------------------------------
+  Godot 4 游戏引擎做的机器人展示场景（arachne_showcase）。
+  ★ 关键事实：里面的 ros2_bridge_placeholder.gd —— 文件名就叫 placeholder，
+    意味着 Godot 与 ROS2 之间目前没有真实连接，纯粹是个好看的静态展示。
+  → 对你的任务完全无关，可以彻底忽略。
+
+--------------------------------------------------------------------------------
+▶ recordings/teach/                            相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  9 个 JSON 文件，是用示教面板在真机上录制的关节轨迹回放数据。
+  文件名带日期：arachne_teach_20260531_144925.json 等。
+  另有 teach_panel_config.json（面板配置）。
+
+  ★ 对你的用处：这是「人类专家演示」数据。如果你想做模仿学习、或者给
+    LLM 提供 few-shot 示例（"专家是这样抓的"），这是现成的语料。
+    也可以用来验证你的 Agent 产出的动作序列是否合理。
+
+--------------------------------------------------------------------------------
+▶ yolo_workspace/                              相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  ▪ weights/yolo26n_seg_taco_best.pt
+      ★ 已训练好的 YOLO 实例分割模型，TACO 数据集（垃圾检测）。
+        这是整个系统唯一的「感知能力」来源。
+  ▪ configs/trash_mvp.yaml   垃圾类别配置
+  ▪ calibration/ datasets/ engines/ runs/   均为空目录占位（.gitkeep）
+
+  ★ 对你的启示：现有系统的感知 = YOLO 检测框 + 深度图 → 3D 坐标。
+    没有任何语义理解（"把桌子上的瓶子拿给我"这种指令无法处理）。
+    你的 LLM/VLM Agent 正是要补上这一层。
+
+--------------------------------------------------------------------------------
+▶ .github/workflows/static-check.yml           相关度：低   优先级：P3
+--------------------------------------------------------------------------------
+  CI 只做三件事，全部不需要 ROS 环境：
+    1. 检查 6 个关键文件是否存在
+    2. bash -n 检查所有 .sh 语法
+    3. python3 -m compileall 编译 arachne_hardware 和 arachne_operator
+  触发条件：pull_request，或 push 到 jetson 分支。
+  ★ 说明：这个项目没有自动化测试，质量靠人工 dry-run 检查保证。
+
+
+================================================================================
+第三章  src/ 各 ROS2 包详解
+================================================================================
+
+--------------------------------------------------------------------------------
+▶ src/arachne_agent_bridge/                    相关度：极高  优先级：P0
+--------------------------------------------------------------------------------
+  包描述：Safe task and teach-control bridge for external Arachne agents.
+  角色：★★★ 你的正门。详见【第五章】完整分析。
+  文件：
+    arachne_agent_bridge/agent_bridge.py ..... 742 行，唯一的实现文件
+    launch/agent_bridge.launch.py ............ 启动文件，暴露 18 个参数
+    package.xml / setup.py / setup.cfg / resource/
+  可执行入口：agent_bridge
+
+--------------------------------------------------------------------------------
+▶ src/arachne_demo/                            相关度：极高  优先级：P0
+--------------------------------------------------------------------------------
+  包描述：Interactive demo launch files and controller input tools.
+  角色：★★ Gazebo 演示的主场，也是你要替换的 autopick 规划器所在地。
+
+  文件：
+    arachne_demo/gazebo_autopick_planner.py ... ★759 行，写死逻辑的规划器
+                                                 详见【第七章】
+    arachne_demo/camera_follow_controller.py .. Gazebo 相机跟随机器人
+    arachne_demo/switch_teleop.py ............. 手柄/键盘遥控转 cmd_vel
+    arachne_demo/web_gamepad_bridge.py ........ 网页手柄（浏览器当遥控器）
+    launch/gazebo_autopick_demo.launch.py ..... ★自动抓取演示
+    launch/switch_gazebo_demo.launch.py ....... ★手柄遥控 Gazebo 演示
+    launch/switch_rviz_demo.launch.py ......... 手柄遥控 RViz 演示（无物理）
+    worlds/arachne_showroom.sdf ............... ★629 行，唯一的仿真场景
+
+  可执行入口：gazebo_autopick_planner、camera_follow_controller、
+              switch_teleop、web_gamepad_bridge
+
+--------------------------------------------------------------------------------
+▶ src/arachne_description/                     相关度：高   优先级：P1
+--------------------------------------------------------------------------------
+  包描述：Unified robot description for the Scout-Aubo-MS42DC mobile manipulator.
+  角色：★ 机器人的「身体定义」。所有仿真、可视化、运动学都从这里读模型。
+
+  文件结构：
+    urdf/arachne.urdf.xacro ........ ★主入口，25 个 xacro:arg 可配置
+    urdf/aubo/ ..................... Aubo i5 机械臂
+    urdf/scout/ .................... Scout 2.0 底盘
+    urdf/gripper/ .................. 夹爪（ms42dc / ag95 两套）
+    urdf/sensors/ .................. 激光雷达、深度相机
+    urdf/accessories/ .............. 前篮、后架
+    urdf/gazebo/arachne_gazebo_plugins.xacro  ★★Gazebo 插件定义
+    urdf/common_inertials.xacro .... 惯量宏
+    urdf/materials.xacro ........... 材质颜色
+    meshes/ ........................ 45 个 STL + 21 个 DAE 网格模型
+    rviz/ .......................... 13 个 RViz 配置
+    config/ launch/
+
+  ★ arachne.urdf.xacro 的 25 个参数中，与仿真最相关的几个：
+      gripper_type ......... 默认 ms42dc（可选 ag95）
+      with_lidar ........... 默认 true
+      with_ee_camera ....... 默认 true（★Gazebo 演示里被设为 false）
+      with_gazebo_plugins .. 默认 false ← ★必须显式设 true 才有 Gazebo 控制
+      gazebo_drive_wheels .. 默认 false ← ★必须显式设 true 轮子才会转
+      with_ros2_control .... 默认 false
+      with_mimic_joints .... 默认 true（Gazebo 演示里被设为 false）
+      with_rear_rack ....... 默认 true
+      with_front_basket .... 默认 true
+
+    ★★ 与 Gazebo 相关的两个开关默认都是 false，说明「默认加载的模型是
+       纯静态可视化模型」。要跑仿真必须显式打开，这也是安全设计的一部分。
+
+  ★ 机械臂安装位姿（硬编码在多处，值得记住）：
+      arm_mount_xyz = (0.22, 0.0, 0.105)   机械臂基座相对底盘的位置
+      arm_mount_rpy = (0.0, 0.0, π/2)      绕 Z 轴转 90 度
+      lidar_xyz     = (0.0, 0.035, 0.6223)
+      front_basket_xyz = (0.4655, 0.0, -0.0715)
+
+--------------------------------------------------------------------------------
+▶ src/arachne_gazebo/                          相关度：高   优先级：P1
+--------------------------------------------------------------------------------
+  包描述：Gazebo-specific helper nodes for the Arachne demo.
+  角色：★ C++ 写的 ROS2 ↔ Gazebo 双向桥接，是仿真链路的关键胶水。
+  构建系统：ament_cmake（C++，不是 Python）
+  依赖：gz-msgs10、gz-transport13  ← ★据此推断对应 Gazebo Garden 代际
+
+  两个可执行文件：
+
+  ▪ gazebo_camera_track_bridge
+      作用：控制 Gazebo GUI 摄像机跟随机器人移动。
+      参数：offset_topic、target_name（默认 arachne）、follow_pgain（0.85）、
+            track_pgain（1.0）、publish_rate（60.0）
+      ★ 纯视觉效果，与控制逻辑无关，出问题可以直接关掉
+        （with_camera_tracking:=false）
+
+  ▪ gazebo_demo_control_bridge     ★★★ 这个非常重要
+      作用：把 ROS2 话题翻译成 Gazebo 内部话题。
+      订阅（ROS 侧）：
+        /arachne/gripper/command ......... std_msgs/String（open/close/stop）
+        /arachne/gui_joint_states ........ sensor_msgs/JointState ★关键
+        /arachne/demo/reset .............. std_msgs/Empty
+      发布（Gazebo 侧，走 gz-transport 而非 ROS）：
+        /arachne/gazebo/ms42dc_left_finger/command   gz.msgs.Double
+        /arachne/gazebo/ms42dc_right_finger/command  gz.msgs.Double
+        /arachne/gazebo/<6个机械臂关节>/command       gz.msgs.Double
+        /model/arachne/joint_trajectory              gz.msgs.JointTrajectory
+      其他参数：
+        gripper_open_position=0.0、gripper_closed_position=0.6、
+        gripper_max_velocity=1.2、publish_rate=60.0
+        reset_x=0.0、reset_y=0.0、reset_z=0.22、reset_yaw=0.0
+        world_name=arachne_showroom、target_name=arachne
+
+      ★★★ 对你的 Agent 极其重要的发现：
+         这个桥订阅 ROS 的 /arachne/gui_joint_states（JointState 消息），
+         然后把 6 个关节角度转发给 Gazebo 的位置控制器。
+         → 这意味着：在 Gazebo 里，你的 Agent 只要往
+           /arachne/gui_joint_states 发一个 JointState 消息，
+           机械臂就会动到那个姿态。
+         → 这是绕开 agent_bridge 速度指令、在 Gazebo 里直接控制机械臂的
+           现成通路。详见【4.6】。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_hardware/                        相关度：高   优先级：P0
+--------------------------------------------------------------------------------
+  包描述：Real-hardware ROS bringup wrappers for Arachne.
+  角色：★ 真机驱动集合，但★★包含你现在最需要的 mock 假硬件。
+
+  文件：
+    arachne_hardware/hardware_mock.py ......... ★★229 行，假硬件核心
+    arachne_hardware/base_serial_driver.py .... Scout 官方状态桥
+    arachne_hardware/scout_waveshare_serial_driver.py  Scout 微雪串口驱动
+    arachne_hardware/gripper_serial_driver.py . MS42DC 官方桥
+    arachne_hardware/ms42dc_direct_serial_driver.py    MS42DC 直连驱动
+    arachne_hardware/aubo_tcp_driver.py ....... Aubo TCP 驱动（3 个入口）
+    arachne_hardware/aubo_move_joint_action_server.py  Aubo 关节动作服务器
+    arachne_hardware/aubo_sdk/ ................ Aubo 官方 SDK 封装
+    arachne_hardware/safety_state_machine.py .. ★安全状态机
+    arachne_hardware/safety_cmd_vel_gate.py ... 速度指令安全闸门
+    action/AuboMoveJoint.action ............... ★唯一的自定义 action 定义
+    launch/mock_bringup.launch.py ............. ★★无硬件启动
+    launch/real_bringup.launch.py ............. 真机启动（45+ 个参数）
+    config/ scripts/
+
+  ▪ 安全状态机（safety_state_machine.py）
+      5 个状态：disabled → manual / autonomous → estop → fault
+      初始状态：disabled
+      关键规则：一旦进入 estop，只能转到 disabled 或保持 estop
+                （不能直接从急停跳回运行，必须先 recover）
+      发布：/arachne/safety/state （格式 "状态:原因"）
+            /arachne/safety/enabled （manual 或 autonomous 时为 true）
+      服务：enable / disable / estop / recover / set_manual / set_autonomous
+
+  ▪ hardware_mock.py 详解                      ★★★ 第一个里程碑的主角
+      节点名：arachne_hardware_mock
+      参数：publish_rate=30.0、wheel_radius=0.16459、track_width=0.58306
+            （轮径与轮距与 Gazebo DiffDrive 插件里的数值完全一致）
+
+      订阅（5 个）：
+        /cmd_vel ......................... geometry_msgs/Twist
+                                           限幅：线速度 [-0.4, 0.8]
+                                                 角速度 [-1.4, 1.4]
+        /joint_trajectory_controller/joint_trajectory  JointTrajectory
+        /aubo_arm_controller/joint_trajectory          JointTrajectory
+        /arachne/gripper/command ......... String（open/close/数字）
+        /arachne/aubo/teach_command ...... String（teach_on/teach_off）
+
+      发布（5 个 + TF）：
+        /odom ............................ nav_msgs/Odometry ★
+        /joint_states .................... sensor_msgs/JointState ★
+        /arachne/hardware/base_status .... String
+        /arachne/hardware/aubo_status .... String
+        /arachne/hardware/gripper_status . String
+        TF 广播（TransformBroadcaster）
+
+      内部模型：
+        · 底盘：差速运动学积分
+          x += vx·cos(yaw)·dt ；y += vx·sin(yaw)·dt ；yaw += wz·dt
+          左右轮转角 = (vx ∓ wz·track_width/2) / wheel_radius · dt 累加
+        · 机械臂：从当前位置向目标位置线性插值，时长取自轨迹点的
+          time_from_start
+        · 夹爪：open→0.0，close→0.6，数字→(1 - n/19656)·0.6
+
+      HOME 姿态（6 个关节，弧度，全仓库多处复用这组数值）：
+        aubo_shoulder_joint  = -1.5707963267949
+        aubo_upperArm_joint  =  0.201570428261868
+        aubo_foreArm_joint   =  1.65970467002488
+        aubo_wrist1_joint    =  0.485178041391533
+        aubo_wrist2_joint    =  1.67675136677345
+        aubo_wrist3_joint    =  0.76432946885334
+
+      ★★★ 致命细节（直接决定你第一个里程碑的预期）：
+         mock 只订阅 JointTrajectory 类型的机械臂指令，
+         【不订阅】/arachne/aubo/joint_velocity_command。
+         而 agent_bridge 的 arm_cartesian_jog / arm_joint_jog 恰恰只发
+         joint_velocity_command。
+         → 结论：mock 下机械臂点动工具发出去没人接，假机械臂不会动。
+           详见【8.2】的完整能力矩阵。
+
+  ▪ mock_bringup.launch.py
+      只启动 3 个节点（其中 1 个默认关闭）：
+        arachne_safety_state_machine  （安全状态机）
+        arachne_hardware_mock         （假硬件）
+        arachne_safety_cmd_vel_gate   （速度闸门，默认 false）
+      唯一参数：use_safety_gate（默认 false）
+      ★ 极其轻量：零 GPU、零渲染、启动 1 秒内完成。
+
+  ▪ real_bringup.launch.py            相关度：低（仿真阶段）
+      45+ 个参数，控制三套硬件的驱动选择与串口配置。
+      关键默认值（备查）：
+        use_scout=true、use_ms42dc=true、use_aubo=true
+        use_aubo_ros2_driver=false  ★说明作者用自写驱动而非官方驱动
+        scout_driver=waveshare、scout_usb_baudrate=2000000
+        scout_can_bitrate=500000
+        ms42dc_driver=direct、ms42dc_baudrate=115200
+        ms42dc_open_angle_tenths=19656、ms42dc_close_angle_tenths=19656
+        aubo_robot_ip=192.168.127.128、aubo_port=30004、aubo_rpc_port=30004
+        aubo_type=aubo_i5、aubo_teach_method=freedrive
+        aubo_teach_flag_path=/tmp/arachne_aubo_teach_mode
+
+  ▪ AuboMoveJoint.action              相关度：中
+      Goal:     target_joints[]、speed_rad_sec、accel_rad_sec2、
+                blend_radius、duration_sec、goal_tolerance_rad、
+                timeout_sec、label
+      Result:   success、message、final_error_rad
+      Feedback: state、elapsed_sec、max_error_rad
+      ★ 全仓库唯一的自定义 action。真机专用。
+      ★ 它的 Goal 结构对你设计 Agent 的高层指令格式有参考价值：
+        「目标 + 速度 + 容差 + 超时 + 标签」是一个成熟的动作接口设计。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_operator/                        相关度：高   优先级：P1
+--------------------------------------------------------------------------------
+  包描述：Lightweight operator status panel for Arachne.
+          （描述严重低估了实际规模）
+  角色：★★ 最大的包，21798 行 Python，是整个系统的「业务逻辑中枢」。
+
+  文件按行数排序：
+    grasp_preview_pipeline.py ..... 6339 行  ★视觉抓取预览流水线
+    teach_panel.py ................ 5597 行  ★示教面板（GUI）
+    grasp_task_server.py .......... 2334 行  ★★抓取任务服务器（你要调用它）
+    road_cleanup_task_server.py ... 1513 行  道路清扫任务服务器
+    real_hardware_acceptance_test.py  979 行 ★含 AuboI5Kinematics 运动学类
+    apriltag_hand_eye_calibrator.py . 879 行  手眼标定
+    step_cleanup_demo.py ............ 651 行  分步清扫演示
+    demo_orchestrator.py ............ 582 行  演示编排器
+    apriltag_nav_initializer.py ..... 582 行  AprilTag 定位初始化
+    sequence_executor.py ............ 441 行  ★动作序列执行器
+    action_chunk_translator.py ...... 400 行  ★★VLA 动作块翻译器
+    cli.py .......................... 293 行  命令行工具
+    raw_image_viewer.py ............. 291 行
+    teach_visualization_joint_states.py  264 行
+    operator_panel.py ............... 120 行
+    control_owner.py ................ 117 行  ★控制权归属管理
+    aubo_readonly_probe.py .......... 116 行
+    aubo_move_joint_client.py ....... 101 行
+    grasp_geometry.py ................ 75 行  ★点云抓取几何计算
+    entrypoint_checks.py ............. 51 行  ★无硬件检查
+    repo_paths.py / process_utils.py / joint_utils.py   工具函数
+
+  ▪ grasp_task_server.py            ★★★ 你的「高层任务编排」路线的靶子
+      角色：封装了一整套「检测→规划→抓取→放置→归位」的流程，
+            是仓库里唯一在真机上反复验证过的抓取执行器。
+
+      对外服务（全部 std_srvs/Trigger）：
+        /arachne/grasp_task/start ....... 启动抓取任务
+        /arachne/grasp_task/stop ........ 停止
+        /arachne/grasp_task/cancel ...... 取消
+        /arachne/grasp_task/status ...... 查询状态
+        /arachne/grasp_task/preflight ... 起飞前检查
+        /arachne/grasp_task/restore ..... 恢复
+        /arachne/grasp_task/base_status . 底盘状态
+        /arachne/grasp_task/base_stop ... 底盘停止
+      订阅：
+        /arachne/grasp_task/base_command  ★★agent_bridge 转发到这里
+      发布：
+        /arachne/grasp_task/state、/arachne/grasp_task/base_state、
+        /arachne/grasp_task/event
+
+      ★★ base_command 的 JSON 格式（agent_bridge 转发的就是这个）：
+         {"command": "drive_relative", "distance_m": 0.1}
+         {"command": "turn_relative",  "angle_deg": 10.0}
+         别名支持：turn_left / turn_right → turn_relative
+                   drive / move → drive_relative
+
+      关键安全参数：
+        execute_real=False           ★默认不执行真机动作
+        confirm_execute_real=False   ★双重确认
+        allow_base_commands_during_grasp=False
+          ★ 抓取过程中默认拒绝底盘指令（防止手臂在动时底盘乱跑）
+          → 你的 Agent 要处理这个拒绝，不能假设指令一定被接受
+
+      其他值得注意的参数：
+        real_sdk_ip=192.168.127.128（可被 AUBO_ROBOT_IP 环境变量覆盖）
+        real_sdk_move_speed=0.18、real_sdk_move_accel=0.25
+        release_point=basket_a（可选 basket_a / basket_b 两个放置点）
+        grasp_base_offset="-0.23,0.01,0.16"  抓取时底盘到目标的偏移
+        planning_recovery_base_enabled=True  规划失败时挪动底盘重试
+        aubo_control_owner_name="grasp_task_server"  ★控制权归属标识
+        aubo_move_joint_action_name="/arachne/aubo/move_joint"
+
+      dry-run 支持：
+        ros2 run arachne_operator grasp_task_server --dry-run-check
+        → 不碰硬件，只验证代码能加载、参数能解析
+
+  ▪ action_chunk_translator.py      ★★ 相关度：极高
+      角色：把 VLA（Vision-Language-Action）模型输出的「动作块」翻译成
+            机器人指令。
+      话题：/arachne/vla/action_chunk （输入）
+            /arachne/vla/translator/status （状态）
+            /arachne/vla/translator/stop （停止服务）
+
+      ★★★ 这是作者已经预埋的「AI 模型 → 机器人」通道，与 agent_bridge
+         并列的第二条 AI 接入路径。
+         区别：
+           agent_bridge            → 面向「会推理的 Agent」，JSON 工具调用
+           action_chunk_translator → 面向「端到端 VLA 模型」，连续动作块
+         你的项目走的是前者，但后者值得读一遍，因为你的文献调研里
+         OpenVLA、RT-2 这类工作产出的正是 action chunk。
+
+  ▪ sequence_executor.py            相关度：高
+      角色：执行预定义的动作序列。
+      话题/服务：
+        /arachne/sequence/command ....... 序列指令
+        /arachne/sequence/status ........ 状态
+        /arachne/sequence/stop .......... 停止
+        /arachne/sequence/open_gripper .. 开夹爪
+        /arachne/sequence/close_gripper . 关夹爪
+        /arachne/sequence/demo_pick ..... 演示抓取
+        /arachne/sequence/demo_nav_pick . 演示导航+抓取
+      ★ 对你的启示：这是「非 LLM 的任务编排器」。你的 Agent 本质上要
+        做同样的事，但序列由 LLM 动态生成而非写死。可以直接对比两者，
+        作为你开源项目的 baseline 对照。
+
+  ▪ real_hardware_acceptance_test.py  相关度：高（因为含运动学）
+      ★ 里面的 AuboI5Kinematics 类被 agent_bridge.py 第 20 行导入：
+        from arachne_operator.real_hardware_acceptance_test import
+             AuboI5Kinematics
+      → 这意味着 arachne_agent_bridge 依赖 arachne_operator 包，
+        编译时不能只编 agent_bridge 一个包。
+      提供 fk()（正运动学）和 _rotation_vector() 等方法。
+      ★★ 这个类是纯数学，仿真里也能直接用，建议你复用而不是重写。
+
+  ▪ control_owner.py                相关度：中
+      ★ 实现 AGENTS.md 里说的「Aubo 控制归属」机制。
+        通过文件锁（默认路径在 /tmp）标记当前谁在控制机械臂。
+        → 你的 Agent 如果要直接控制机械臂，必须尊重这个机制，
+          否则会与 grasp_task_server 抢控制权。
+
+  ▪ cli.py                          相关度：中   优先级：P1
+      命令行工具 `arachne`，子命令：
+        arachne check offline ............ 离线检查
+        arachne check entrypoints ........ ★检查所有入口点可加载
+        arachne check aubo-action-stack .. 检查 Aubo 动作栈
+        arachne check aubo-readonly ...... 只读探测 Aubo（需网络）
+        arachne check aubo-running ....... 检查 Aubo 运行状态
+        arachne smoke teach-panel ........ 冒烟测试示教面板
+        arachne smoke grasp-task ......... ★冒烟测试抓取服务器
+        arachne smoke road-cleanup ....... 冒烟测试道路清扫
+        arachne smoke aubo-dry-run ....... Aubo 干跑
+        arachne smoke demo-orchestrator .. 演示编排器冒烟测试
+        arachne clean logs ............... 清理日志
+        arachne status ................... 状态查询
+      ★ check offline 和 check entrypoints 完全不需要硬件，
+        是编译后的第一道验证。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_sim/                             相关度：高   优先级：P1
+--------------------------------------------------------------------------------
+  包描述：Lightweight RViz-oriented simulation controllers for Arachne.
+  角色：★ 轻量仿真。注意——是 RViz 可视化 + 自写运动学，【不是 Gazebo 物理】。
+
+  文件：
+    urban_trash_sorting_demo.py ....... ★城市垃圾分拣完整演示
+    moveit_grasp_planning_demo.py ..... MoveIt 抓取规划演示
+    base_sim_controller.py ............ 底盘仿真控制器（积分 cmd_vel）
+    base_teleop_gui.py ................ 底盘遥控 GUI
+    end_effector_direction_markers.py . 末端方向可视化标记
+    launch/urban_trash_sorting_demo.launch.py .. ★33 个参数
+    launch/moveit_grasp_planning_demo.launch.py
+
+  ▪ urban_trash_sorting_demo         ★★ 相关度：极高
+      这是仓库里【功能最完整的仿真任务场景】，也是你「要有完整场景和
+      几个任务」这个目标的最佳参考对象。
+
+      它的能力（从 33 个 launch 参数看出来）：
+        · 随机生成垃圾（trash_seed=26、trash_count=10）
+        · 巡逻模式（patrol_pattern=line，可选 box；
+          patrol_distance_m=1.5、patrol_box_width_m=1.0、
+          patrol_box_height_m=1.2、patrol_entry_m=0.3）
+        · 扫描弧（scan_arc_radius_m=0.32、scan_arc_angle_deg=72.0、
+          scan_arc_samples=9、scan_cycle_duration_sec=4.2）
+        · 调用 MoveIt 规划（use_moveit=true、
+          planner_id=RRTConnectkConfigDefault、playback_speed=0.85）
+        · 点云抓取几何计算（pointcloud_grasp_geometry）
+        · SLAM 地图加载（slam_map_yaml、map_frame_id=map）
+        · 合成抓取基准测试（synthetic_grasp_benchmark=false，
+          synthetic_grasp_trials=60、synthetic_ground_z_m=-0.22）
+        · 检测锁定帧数（detection_lock_frames=1）
+        · RViz 可视化（launch_demo_rviz=true）
+
+      它依赖的消息类型（说明它有多完整）：
+        moveit_msgs（MotionPlanRequest、Constraints、JointConstraint、
+                     RobotState、MoveItErrorCodes）+ GetMotionPlan 服务
+        nav_msgs（OccupancyGrid、Odometry、Path）
+        sensor_msgs（JointState、PointCloud2）
+        visualization_msgs（Marker、MarkerArray）
+        trajectory_msgs（JointTrajectory）
+
+      硬编码的关键姿态（说明它仍然是「写死」的）：
+        HOME ............ 与 mock 一致的 6 关节 home
+        SCAN_CENTER ..... [-1.72, -0.44, 1.66, 0.92, 1.68, -0.05]
+        SCAN_LEFT ....... [-1.96, -0.48, 1.62, 0.98, 1.70, -0.26]
+        SCAN_RIGHT ...... [-1.48, -0.42, 1.70, 0.84, 1.66, 0.18]
+        GRASP_SEED ...... [1.20, -0.26, -1.26, 0.34, -1.44, 0.0]
+        FIXED_SAFE_MID .. [-1.392228627, -0.587456810, 1.402798238,
+                           0.420158124, 1.570706911, 0.178573568]
+        FIXED_BASKET_OVER [-1.187131238, -0.087444694, 2.606213310,
+                           1.122582998, 1.570733434, 0.383692391]
+        源码注释解释了这些数：tool0 垂直向下；basket_over 在篮子中心
+        上方 20cm；safe_mid = basket_over 基础上 +36cm x、+12cm z
+        GRIPPER_JOINTS = ms42dc_left_finger_joint、ms42dc_right_finger_joint
+
+      ★★ 对你的启示：这个 demo 展示了「不用 LLM 能做到多完整」。
+         它有巡逻、扫描、检测、规划、抓取、放置的完整闭环，但：
+           - 扫描姿态写死 3 个
+           - 抓取种子姿态写死
+           - 中转姿态写死到 9 位小数
+           - 巡逻模式只有 line / box 两种
+           - 没有任何自然语言接口
+         你的 Agent 要证明的价值就是：把这些写死的选择变成动态决策。
+         ★ 建议：把这个 demo 作为你论文/README 里的 baseline 对照组。
+
+  ▪ base_sim_controller.py
+      作用：订阅 /cmd_vel，积分出 /odom，纯运动学，无物理引擎。
+      ★ 与 hardware_mock 功能重叠，区别是它面向 RViz 场景，
+        hardware_mock 面向硬件替身。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_nav/                             相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  包描述：Nav2 starter configuration for Scout 2.0 base simulation and
+          future real navigation.
+  角色：导航。注意描述里的 "starter" 和 "future" —— 这是起步配置，不成熟。
+
+  文件：
+    launch/nav2_sim.launch.py ..... 仿真导航
+    launch/nav2_lidar.launch.py ... 真机激光雷达导航
+    config/nav2_params.yaml ....... Nav2 参数
+
+  ▪ nav2_sim.launch.py 的构成：
+      robot_state_publisher（发布 URDF）
+      + arachne_sim/base_sim_controller（假底盘）
+      + static_transform_publisher（map → odom 固定变换，★假的定位）
+      + nav2_bringup（真正的导航栈）
+      地图：arachne_nav/maps/empty.yaml（空地图）
+
+      ★ 注意：map→odom 用的是 static_transform_publisher，意味着
+        没有真正的定位（AMCL/SLAM），机器人认为自己永远在原点附近。
+        这只能验证路径规划，不能验证定位。
+
+  ★ 对你的启示：如果你的 Agent 任务里包含「导航到某处」，
+    现有的导航能力是不完整的。两个选择：
+      A. 只用 base_relative / base_turn 做短距离相对移动（推荐，简单可靠）
+      B. 补齐 Nav2 定位（工作量大，超出两个月项目范围）
+    建议走 A。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_control/                         相关度：低   优先级：P3
+--------------------------------------------------------------------------------
+  包描述：Shared ros2_control configuration and launch contracts.
+  角色：ros2_control 框架的配置，但★实际未被主流程使用。
+
+  文件：
+    config/ros2_controllers.yaml .... 控制器配置
+    config/hardware_profiles.yaml ... 硬件配置档
+    launch/mock_ros2_control.launch.py ... controller_manager + 4 个 spawner
+                                            + robot_state_publisher
+    launch/prehardware_control.launch.py
+
+  ★ 判断依据：Gazebo 演示走的是 gz-sim 原生插件（JointPositionController），
+    真机走的是自写串口/TCP 驱动，两条路都绕开了 ros2_control。
+    这个包更像是「为将来标准化预留的位置」。
+  → 你可以忽略，除非你想把系统改造成标准 ros2_control 架构（不建议，
+    超出项目范围）。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_moveit_config/                   相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  包描述：MoveIt2 planning configuration for Aubo i5 mobile manipulator variants.
+  角色：运动规划配置。
+
+  config/ 目录：
+    arachne_ms42dc.srdf.xacro ..... ★MS42DC 夹爪版本的语义描述
+    arachne_ag95.srdf.xacro ....... AG95 夹爪版本
+    joint_limits.yaml ............. 关节限位
+    kinematics.yaml ............... 运动学求解器配置
+    moveit_controllers.yaml ....... 控制器接口
+    ompl_planning.yaml ............ OMPL 规划器参数
+  launch/moveit_planning.launch.py
+
+  ★ 被 arachne_sim 的两个 demo 使用（use_moveit=true 时）。
+  ★ agent_bridge 【不】使用 MoveIt，它用的是自己的阻尼最小二乘 IK。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_sensors/                         相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  包描述：Sensor bringup nodes for Arachne.
+  角色：Orbbec Gemini335 深度相机接入。
+
+  ▪ gemini335_v4l2_node.py
+      通过 V4L2 直接读取相机（不用 Orbbec SDK）。
+      关键参数：
+        color_device=/dev/video6、color 640x480 @30fps、YUYV 格式
+        depth_device=/dev/video0、depth 640x480 @5fps
+        color_frame_id=camera_color_optical_frame
+        color_batch_frames=30、color_capture_timeout_sec=4.0
+      ★ 硬编码的设备号说明这是针对特定机器调过的，换机器要改。
+
+  ▪ depth_to_pointcloud_node.py
+      深度图 → 点云转换。支持 --dry-run-check。
+      ★ AGENTS.md 明确规定：这个节点【绝不能】成为 teach_panel 启动的
+        一部分，只能独立运行做调试。
+
+  ★ 真机专用。仿真里 Gazebo 可以生成深度图，但当前 Gazebo 演示的 URDF
+    设置了 with_ee_camera=false，即【Gazebo 演示里没有相机】。
+    → 这是你做视觉 Agent 时会撞到的墙，详见【9.3】。
+
+--------------------------------------------------------------------------------
+▶ src/arachne_gripper/                         相关度：中   优先级：P2
+--------------------------------------------------------------------------------
+  包描述：Simulation and hardware-facing gripper utilities.
+
+  ▪ gripper_sim_controller.py ... 夹爪仿真控制
+  ▪ gripper_state_gui.py ........ 夹爪状态 GUI
+  ▪ joint_state_mux.py .......... ★关节状态多路复用
+      作用：把机械臂关节状态和夹爪关节状态合并成一个 /joint_states。
+      → 如果你发现 /joint_states 里缺关节，问题可能在这里。
+
+--------------------------------------------------------------------------------
+▶ src/vendor/                                  相关度：低   优先级：P3
+--------------------------------------------------------------------------------
+  空壳占位包（package.xml 里 description 为空）。忽略。
+
+
+================================================================================
+第四章  ★重点：Gazebo 仿真完整分析
+================================================================================
+
+4.1 Gazebo 版本与技术栈
+--------------------------------------------------------------------------------
+  用的是【新版 Gazebo（gz sim）】，不是老的 gazebo-classic。
+
+  证据链：
+    · arachne_gazebo/CMakeLists.txt 依赖 gz-msgs10、gz-transport13
+    · launch 文件调用 ros_gz_sim 的 gz_sim.launch.py
+    · 桥接用 ros_gz_bridge/parameter_bridge
+    · 插件名形如 gz::sim::systems::DiffDrive
+
+  版本推断：gz-msgs10 + gz-transport13 → Gazebo Garden 代际。
+  ⚠ 请在服务器上用以下命令核实实际安装版本：
+      gz sim --version
+      ros2 pkg list | grep ros_gz
+      apt list --installed | grep gz-
+
+  依赖包（必须已安装，否则 launch 会失败）：
+      ros_gz_sim、ros_gz_bridge、xacro
+      以及第三方模型包：aubo_description、scout_description、
+                        dh_ag95_description
+
+4.2 唯一的 world 文件：arachne_showroom.sdf
+--------------------------------------------------------------------------------
+  路径：src/arachne_demo/worlds/arachne_showroom.sdf
+  规模：629 行，SDF 1.9
+  world 名称：arachne_showroom  ← ★launch 参数 world_name 必须与之匹配
+
+  ▪ 物理参数
+      max_step_size = 0.005555556  （= 1/180 秒）
+      real_time_factor = 1.0
+      real_time_update_rate = 180   （180 Hz 物理步进）
+      gravity = 0 0 -9.80665
+      magnetic_field = 6e-06 2.3e-05 -4.2e-05
+      atmosphere type = adiabatic
+
+  ▪ 渲染设置（★为省 GPU 做过优化）
+      scene.shadows = false        ← 全局关闭阴影
+      sun_key（方向光）cast_shadows = false，intensity = 1.4
+      soft_fill（点光）cast_shadows = false，intensity = 0.55
+      background = 浅蓝灰 (0.78 0.82 0.86)
+      ambient = 0.35 0.36 0.37
+      → 说明作者刻意压低了渲染开销。这对你在 AutoDL 上跑很有利。
+
+  ▪ 场景内容（16 个模型，坐标为 x y z）
+      showroom_floor ....... 地面（静态）
+      demo_pedestal ........ (-1.20, -1.40, 0.25)  演示台座
+      soft_target_box ...... ( 1.00, -1.50, 0.18)  软目标箱
+      marker_column ........ (-2.00,  1.40, 0.45)  标记柱
+      start_lane_marker .... (-2.70,  0.00, 0.046) 起始车道标记
+      slalom_marker_a ...... (-1.40,  2.10, 0.28)  绕桩标记 A
+      slalom_marker_b ...... (-0.40,  1.55, 0.28)  绕桩标记 B
+      slalom_marker_c ...... ( 0.60,  2.10, 0.28)  绕桩标记 C
+      work_table ........... ( 2.45,  1.70, 0.42)  工作台（含 4 条桌腿）
+      foam_block_a ......... ( 2.25,  1.58, 0.91)  泡沫块 A（桌上）
+      foam_block_b ......... ( 2.60,  1.82, 0.89)  泡沫块 B（桌上）
+      inspection_crate ..... ( 3.45,  0.25, 0.22)  检查箱
+      pick_target_pad ...... ( 3.40, -2.35, 0.047) 抓取目标垫
+      pick_bottle .......... ( 3.40, -2.35, 0.27)  ★★抓取目标瓶子
+      pick_ball ............ ( 3.85, -2.05, 0.16)  球（备用目标）
+      camera_view_anchor ... ( 0, 0, 0 )           相机锚点
+
+  ▪ 场景语义解读
+      这是一个「展厅」，设计了三种任务的素材：
+        1. 绕桩行驶：start_lane_marker → slalom a/b/c 三个桩
+        2. 桌面操作：work_table + foam_block_a/b
+        3. 地面抓取：pick_target_pad + pick_bottle + pick_ball
+      ★ 当前只有第 3 项被 autopick 规划器实现了。
+      ★★ 第 1、2 项是【现成的、无人使用的场景素材】，你的 Agent 可以
+         直接拿来设计新任务，不需要自己建模型。这对你「要有完整场景和
+         几个任务」的目标是天大的便利。
+
+4.3 Gazebo 插件配置（arachne_gazebo_plugins.xacro）
+--------------------------------------------------------------------------------
+  ▪ DiffDrive 差速驱动插件
+      订阅（gz 侧）：/cmd_vel
+      发布（gz 侧）：/gz/odom   ★注意不是 /odom
+      frame_id = odom，child_frame_id = base_link
+      odom_publish_frequency = 30 Hz
+      轮距 wheel_separation = 0.58306 m
+      轮径 wheel_radius = 0.16459 m
+      限幅：
+        线速度 ±0.8 m/s，角速度 ±1.4 rad/s
+        线加速度 ±1.2 m/s²，角加速度 ±2.2 rad/s²
+      ★ 只有 gazebo_drive_wheels:=true 时才启用
+
+  ▪ JointTrajectoryController 插件
+      6 个 Aubo 关节，接收轨迹指令
+
+  ▪ JointPositionController 插件（× 6，每个关节一个）
+      每个关节独立监听 /arachne/gazebo/<joint>/command （gz.msgs.Double）
+      关节列表：aubo_shoulder_joint、aubo_upperArm_joint、
+                aubo_foreArm_joint、aubo_wrist1_joint、
+                aubo_wrist2_joint、aubo_wrist3_joint
+      ★★ 这是【位置】控制。真机是【速度】控制。两者根本不通用。
+
+  ▪ JointPositionController 插件（× 2，夹爪手指）
+      /arachne/gazebo/ms42dc_left_finger/command
+      /arachne/gazebo/ms42dc_right_finger/command
+      PID：p_gain=6.0、i_gain=0.0、d_gain=0.2，cmd 限幅 ±2.0
+
+  ▪ JointStatePublisher 插件
+      发布 10 个关节的状态（4 个轮子 + 6 个机械臂关节）
+      ★★★ 但它发布到【gz 内部话题】，而 ros_gz_bridge 的桥接参数里
+         【没有 joint_states】！
+         → 结论：Gazebo 里的关节状态【不会】出现在 ROS 侧的 /joint_states。
+         → 这是一个极其重要的坑，见 4.5。
+
+  ▪ 摩擦系数设置
+      ms42dc_base_link ......... mu1=mu2=0.8
+      ms42dc_left_finger_link .. mu1=mu2=1.1   ← 手指摩擦更大，便于抓取
+      ms42dc_right_finger_link . mu1=mu2=1.1
+
+4.4 三个 Gazebo/仿真 launch 文件详解
+--------------------------------------------------------------------------------
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ ① gazebo_autopick_demo.launch.py     ★★★ 最重要                  │
+  └────────────────────────────────────────────────────────────────────┘
+  启动命令：
+      ros2 launch arachne_demo gazebo_autopick_demo.launch.py
+
+  URDF 处理（xacro 映射，★写死在代码里不可通过命令行改）：
+      gripper_type        = <来自 launch 参数，默认 ms42dc>
+      with_lidar          = "true"
+      with_ee_camera      = "false"   ★★没有末端相机！
+      with_gazebo_plugins = "true"
+      with_mimic_joints   = "false"
+      gazebo_drive_wheels = "true"
+
+  机器人生成位置：x=0.0, y=0.0, z=0.22, 名称 "arachne"，
+                  allow_renaming=true
+
+  ros_gz_bridge 桥接的话题（★只有 8 条，方向很关键）：
+      /cmd_vel                     ROS → GZ   （geometry_msgs/Twist）
+      /gz/odom                     GZ → ROS   （nav_msgs/Odometry）
+      /arachne/gazebo/aubo_shoulder_joint/command   ROS → GZ (Float64)
+      /arachne/gazebo/aubo_upperArm_joint/command   ROS → GZ (Float64)
+      /arachne/gazebo/aubo_foreArm_joint/command    ROS → GZ (Float64)
+      /arachne/gazebo/aubo_wrist1_joint/command     ROS → GZ (Float64)
+      /arachne/gazebo/aubo_wrist2_joint/command     ROS → GZ (Float64)
+      /arachne/gazebo/aubo_wrist3_joint/command     ROS → GZ (Float64)
+
+      ★ 桥接符号含义：
+        `]` = 单向 ROS→GZ    `[` = 单向 GZ→ROS    `@` = 双向
+      ★★ 没有 /joint_states、没有 /tf、没有相机、没有激光雷达。
+         这个桥是【极简的】，只够跑通 autopick 演示。
+
+  全部 launch 参数与默认值：
+      gripper_type ................. ms42dc
+      with_gazebo .................. true    （false 则只起 ROS 节点不起仿真）
+      with_autopick ................ true    ★★关掉它就能让 Agent 接管
+      with_camera_tracking ......... true
+      gazebo_camera_distance ....... 2.2
+      gazebo_camera_offset_topic ... /arachne/gazebo_camera/follow_offset
+      gazebo_render_backend ........ opengl
+      gazebo_update_rate ........... 180
+      world_name ................... arachne_showroom
+      gz_args ...................... "-r -v 1 -z 180 --render-engine ogre2
+                                      --render-engine-api-backend opengl
+                                      <world 绝对路径>"
+
+      gz_args 各标志含义：
+        -r ............... 启动后立即开始仿真（不暂停）
+        -v 1 ............. 日志级别 1（只报错误，很安静）
+        -z 180 ........... 物理更新率 180 Hz
+        --render-engine ogre2 .................. 渲染引擎
+        --render-engine-api-backend opengl ..... 图形 API
+
+  启动的 6 个节点：
+      spawn_arachne_autopick_model ......... 生成机器人（ros_gz_sim/create）
+                                             条件：with_gazebo
+      arachne_autopick_gazebo_bridge ....... 话题桥接
+                                             条件：with_gazebo
+      autopick_camera_follow_controller .... 相机跟随
+                                             条件：with_camera_tracking
+      autopick_gazebo_camera_track_bridge .. 相机轨道桥
+                                             条件：with_camera_tracking
+      autopick_gazebo_demo_control_bridge .. ★★夹爪与机械臂控制桥
+                                             ★无条件启动！
+      gazebo_autopick_planner .............. ★写死的规划器
+                                             条件：with_autopick
+
+  autopick 规划器的默认目标参数（在 launch 里覆盖）：
+      odom_topic ......... /gz/odom
+      target_name ........ pick_bottle
+      target_x ........... 3.40
+      target_y ........... -2.35
+      target_z ........... 0.38     ★注意：world 里瓶子中心在 z=0.27，
+                                      这里的 0.38 是抓取点（瓶身上部）
+      approach_x ......... 2.62
+      approach_y ......... -2.35
+      approach_standoff .. 0.76
+
+  ★★★ 关键：GZ_SIM_RESOURCE_PATH 环境变量
+     launch 文件自动把这 4 个包的【父目录】拼进 GZ_SIM_RESOURCE_PATH：
+       arachne_description、aubo_description、scout_description、
+       dh_ag95_description
+     → 如果这 4 个包里任何一个没编译，launch 会在 get_package_share_
+       directory 时直接抛异常。
+     → ★ 即使你用 ms42dc 夹爪，dh_ag95_description 也【必须存在】，
+       因为路径拼接是无条件执行的。
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ ② switch_gazebo_demo.launch.py       手柄遥控演示                   │
+  └────────────────────────────────────────────────────────────────────┘
+  启动命令：
+      ros2 launch arachne_demo switch_gazebo_demo.launch.py
+
+  主要参数：
+      gripper_type ............... ms42dc
+      with_gazebo ................ true
+      with_rviz .................. false
+      with_joy ................... true      （物理手柄）
+      with_web_gamepad ........... false     ★网页手柄，无需硬件手柄
+      joy_dev .................... /dev/input/js0
+      web_gamepad_host ........... 127.0.0.1
+      web_gamepad_port ........... 8787
+      forward_axis_multiplier .... -1.0      （前进轴反向）
+      lateral_axis_multiplier .... 1.0
+      reset_topic ................ /arachne/demo/reset
+      base_reset_service ......... /arachne/base/reset
+      gazebo_camera_distance ..... 2.0
+      gazebo_camera_follow_pgain . 0.85
+      gazebo_camera_track_pgain .. 1.0
+      gazebo_render_backend ...... opengl
+      gazebo_update_rate ......... 180
+      world_name ................. arachne_showroom
+
+  ★ with_web_gamepad:=true 时会起一个网页服务（127.0.0.1:8787），
+    用浏览器就能遥控，不需要物理手柄。★这对无手柄的服务器环境很实用，
+    也是验证「机器人在 Gazebo 里能动」的最快手段。
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ ③ switch_rviz_demo.launch.py         RViz 遥控（无 Gazebo）        │
+  └────────────────────────────────────────────────────────────────────┘
+  不启动 Gazebo，只用 RViz 显示 + arachne_sim/base_sim_controller 积分。
+  ★ 无物理引擎、无碰撞、极省资源。适合只验证「指令→位姿」链路。
+
+4.5 ★★★ Gazebo 仿真的三个致命限制（README 完全没写）
+--------------------------------------------------------------------------------
+
+  【限制一】ROS 侧收不到 /joint_states
+      原因：ros_gz_bridge 的桥接列表里没有 joint_states。
+      后果：任何依赖 /joint_states 的节点在 Gazebo 演示下都拿不到数据。
+      ★ 对 agent_bridge 的直接影响：
+        agent_bridge._current_arm() 会抛 "no complete Aubo joint state"，
+        导致 arm_cartesian_jog 和 arm_joint_jog 【必然失败】。
+      ★ autopick 规划器怎么绕开的：
+        它不读关节反馈，而是自己在内存里维护 self.current_arm，
+        每个控制周期算目标、限速、然后发出去。
+        → 这是【开环控制】。仿真里能跑通是因为 Gazebo 的位置控制器
+          足够听话，真机上这么做会很危险。
+
+  【限制二】odom 话题名不一致
+      Gazebo 发的是 /gz/odom，agent_bridge 默认订阅 /odom。
+      → 必须重映射，否则 agent_bridge 永远拿不到底盘位姿。
+
+  【限制三】机械臂控制协议不通用
+      Gazebo 侧：/arachne/gazebo/<joint>/command，std_msgs/Float64，
+                 【位置】控制
+      真机侧：  /arachne/aubo/joint_velocity_command，
+                 Float64MultiArray，【速度】控制
+      agent_bridge 只会发后者。
+      → agent_bridge 的机械臂工具在 Gazebo 下【完全无效】。
+
+  ★★★ 但是有一条现成的救命通路（见 4.6）
+
+
+4.6 ★★★ Gazebo 下控制机械臂的正确姿势
+--------------------------------------------------------------------------------
+  gazebo_demo_control_bridge 订阅 ROS 话题 /arachne/gui_joint_states
+  （类型 sensor_msgs/JointState），并把其中的 6 个关节角度转发给
+  Gazebo 的位置控制器。
+
+  → 结论：你的 Agent 在 Gazebo 里控制机械臂，应该发布 JointState 到
+    /arachne/gui_joint_states，而不是走 agent_bridge 的点动工具。
+
+  数据流：
+      你的 Agent
+        │  发布 sensor_msgs/JointState
+        ↓
+      /arachne/gui_joint_states  (ROS 话题)
+        │
+        ↓
+      gazebo_demo_control_bridge  (C++ 节点，订阅 ROS，发布 gz)
+        │  转成 gz.msgs.Double × 6
+        ↓
+      /arachne/gazebo/<joint>/command  (gz 内部话题)
+        │
+        ↓
+      JointPositionController 插件 × 6
+        │
+        ↓
+      Gazebo 里的机械臂真的动了
+
+  同理，夹爪：
+      你的 Agent → /arachne/gripper/command (String: open/close/stop)
+                 → gazebo_demo_control_bridge
+                 → /arachne/gazebo/ms42dc_{left,right}_finger/command
+                 → 夹爪张合
+      ★ 这条路 agent_bridge 的 gripper 工具正好也是发
+        /arachne/gripper/command，所以【夹爪工具在 Gazebo 下是有效的】。
+
+  ⚠ 但要注意：/arachne/gui_joint_states 是【绝对关节角度】，
+    不是相对增量。你的 Agent 需要自己维护当前姿态并做插值，
+    否则机械臂会瞬移（Gazebo 位置控制器会尽力追，但会很暴力）。
+    autopick 规划器里的 _step_arm_toward_target() 就是干这个的，
+    可以直接借鉴它的限速逻辑（arm_joint_speed=0.55 rad/s）。
+
+
+================================================================================
+第五章  ★★★ 重点：arachne_agent_bridge 完整分析
+================================================================================
+
+5.1 定位与设计哲学
+--------------------------------------------------------------------------------
+  包描述：Safe task and teach-control bridge for external Arachne agents.
+
+  源码里的类文档字符串（agent_bridge.py:128-133）直接说明了设计意图：
+    "Bounded teach-control bridge for an external agent.
+     The bridge exposes a small JSON tool surface. It deliberately does not
+     load API keys or talk to an LLM provider; external agent processes call
+     this node after they have made a task decision."
+
+  中文翻译与解读：
+    · "Bounded"（有界的）——所有指令都被夹紧在安全范围内
+    · "teach-control"（示教级控制）——只做小幅点动，不做大范围规划
+    · "deliberately does not load API keys"（刻意不加载 API Key）
+      ★ 这是给你划的分工线：桥只管安全执行，LLM 推理归你的进程管
+    · "after they have made a task decision"（在你做出决策之后）
+      ★ 桥不做决策，它只是一个安全的执行末端
+
+  ★★ 这个分工对你极其有利：
+     你不需要写 ROS 驱动、不需要处理限速、不需要管急停，
+     你只需要写「理解人话 → 输出 JSON」这一层。
+
+5.2 文件结构
+--------------------------------------------------------------------------------
+  src/arachne_agent_bridge/
+  ├── arachne_agent_bridge/
+  │   ├── __init__.py
+  │   └── agent_bridge.py ........ 742 行，全部实现
+  ├── launch/
+  │   └── agent_bridge.launch.py . 85 行，暴露 18 个参数
+  ├── package.xml
+  ├── setup.py ................... console_scripts: agent_bridge
+  ├── setup.cfg
+  └── resource/arachne_agent_bridge
+
+  ★ 依赖：agent_bridge.py 第 20 行
+      from arachne_operator.real_hardware_acceptance_test import AuboI5Kinematics
+    → 依赖 arachne_operator 包。编译时必须两个包都编。
+  ★ 第三方依赖：numpy（做雅可比与线性代数）
+
+5.3 对外接口全清单
+--------------------------------------------------------------------------------
+
+  ▪ 话题（Topic）
+
+    ┌─ 输入（你发给桥）─────────────────────────────────────────────┐
+    │ /arachne/agent/command      std_msgs/String                   │
+    │   内容：JSON 字符串（也接受裸工具名字符串）                    │
+    │   QoS：默认，队列 10                                          │
+    └───────────────────────────────────────────────────────────────┘
+
+    ┌─ 输出（桥发给你）─────────────────────────────────────────────┐
+    │ /arachne/agent/status       std_msgs/String                   │
+    │   内容：完整状态快照 JSON                                      │
+    │   频率：0.5 秒一次（status_publish_period_sec），              │
+    │         每次收到指令后额外发一次                                │
+    │                                                                │
+    │ /arachne/agent/tools        std_msgs/String                   │
+    │   内容：{"tools": [...10 个工具的 schema...]}                  │
+    │   频率：0.5 秒一次，队列深度 1                                 │
+    │                                                                │
+    │ /arachne/agent/event        std_msgs/String                   │
+    │   内容：事件 JSON，两种 kind：                                 │
+    │     "ready"          —— 节点启动完成，附带工具名列表            │
+    │     "command_result" —— 每条指令的执行结果 + 脱敏后的原始指令   │
+    └───────────────────────────────────────────────────────────────┘
+
+  ▪ 服务（Service）—— 全部是 std_srvs/Trigger
+
+    /arachne/agent/status      返回状态快照 JSON（在 response.message 里）
+    /arachne/agent/tools       返回工具清单 JSON
+    /arachne/agent/safe_stop   立即安全停止
+
+    ★★ 注意：/arachne/agent/status 和 /arachne/agent/tools 既是话题
+       又是服务，同名不冲突（ROS2 里话题和服务是不同命名空间）。
+    ★ 调试时用服务更方便，一次性拿到结果：
+       ros2 service call /arachne/agent/status std_srvs/srv/Trigger
+
+  ▪ 动作（Action）：无。agent_bridge 不提供任何 action。
+
+5.4 桥内部使用的话题（它订阅/发布的机器人侧接口）
+--------------------------------------------------------------------------------
+
+  ▪ 桥发布（控制指令出口）
+      /cmd_vel .............................. geometry_msgs/Twist
+      /arachne/aubo/joint_velocity_command .. std_msgs/Float64MultiArray
+      /arachne/gripper/command .............. std_msgs/String
+      /arachne/aubo/teach_command ........... std_msgs/String
+      /arachne/grasp_task/base_command ...... std_msgs/String (JSON)
+
+  ▪ 桥订阅（状态输入）
+      /joint_states ......................... sensor_msgs/JointState
+      /odom ................................. nav_msgs/Odometry
+      /arachne/hardware/aubo_status ......... std_msgs/String
+      /arachne/hardware/base_status ......... std_msgs/String
+      /arachne/hardware/gripper_status ...... std_msgs/String
+      /arachne/safety/state ................. std_msgs/String
+      /arachne/grasp_task/state ............. std_msgs/String
+      /arachne/grasp_task/base_state ........ std_msgs/String
+
+  ★ 以上话题名全部是可通过 ROS 参数改的，这一点很重要，
+    因为 Gazebo 环境下你必须改 odom_topic。但注意 launch 文件
+    没有全部暴露（见 5.8）。
+
+5.5 指令 JSON 格式
+--------------------------------------------------------------------------------
+
+  ▪ 基本格式
+      {"tool": "<工具名>", "<参数名>": <值>, ...}
+
+  ▪ 容错设计（agent_bridge.py:257-296）
+      1. 空字符串 → 直接忽略，不报错
+      2. JSON 解析失败 → 把整个字符串当作工具名
+         例：发送 "safe_stop" 等价于 {"tool": "safe_stop"}
+      3. "tool" 字段缺失时，回退读 "command" 字段
+      4. 工具名自动转小写、去空格
+      5. 支持一套别名映射：
+            state, status      → get_robot_state
+            stop               → safe_stop
+            base_move          → base_velocity
+            base_cmd_vel       → base_velocity
+            drive_relative     → base_relative
+            turn_relative      → base_turn
+            arm_xyz, tcp_jog   → arm_cartesian_jog
+            joint_jog          → arm_joint_jog
+            open_gripper       → gripper（自动补 command="open"）
+            close_gripper      → gripper（自动补 command="close"）
+            teach              → aubo_teach
+
+      ★ 这套容错对 LLM 极其友好：LLM 输出的工具名稍有偏差也能被接住。
+        ★ 但你的 Agent 应该始终输出规范名，别依赖别名——
+          规范名是 tools 话题里公布的，别名是未文档化的实现细节。
+
+  ▪ 参数别名（每个工具都支持多种写法）
+      base_velocity:      linear_x / vx      angular_z / wz
+                          duration_sec / duration
+      base_relative:      distance_m / distance
+      base_turn:          angle_deg / angle / angle_rad（自动转度）
+      arm_cartesian_jog:  vector[3] 或 x/y/z 或 axis+distance_m+sign
+                          speed_m_s、duration_sec
+      arm_joint_jog:      joint / index      delta_rad / delta
+                          speed_rad_s、duration_sec
+      gripper:            command / state
+      aubo_teach:         enabled / value
+
+5.6 ★ 10 个工具完整规格
+--------------------------------------------------------------------------------
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 1. get_robot_state                          danger: read_only        │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool": "get_robot_state"}
+    参数：无
+    作用：返回缓存的底盘、机械臂、夹爪、安全、任务状态。
+    安全门：无（read_only 不受 motion_enabled 限制）
+    返回：{"ok": true, "message": "robot state", "data": {"state": {...}}}
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 2. safe_stop                                danger: stop             │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool": "safe_stop"}
+    参数：无
+    作用：一次性做 5 件事——
+          ① 清空所有活跃指令状态
+          ② 发布零速 Twist 到 /cmd_vel
+          ③ 发布 4 次零速到机械臂（repeat=4，防丢包）
+          ④ 发 "stop" 到夹爪
+          ⑤ 发 {"command":"stop"} 到 grasp_task base_command
+    安全门：无（可以随时调用，这是设计意图）
+    ★★ 你的 Agent 应该在任何异常、超时、不确定的情况下无条件调用它。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 3. arm_stop                                 danger: stop             │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool": "arm_stop"}
+    作用：只发 4 次零速到机械臂，不碰底盘和夹爪。
+    安全门：无
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 4. base_velocity                            danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"base_velocity", "linear_x":0.1, "angular_z":0.0,
+           "duration_sec":1.0}
+    参数：
+      linear_x     线速度 m/s，夹紧到 ±max_base_linear_x（默认 0.20）
+      angular_z    角速度 rad/s，夹紧到 ±max_base_angular_z（默认 0.35）
+      duration_sec 持续时间，夹紧到 [0.05, max_base_command_duration_sec]
+                   （默认上限 2.0 秒），缺省值 0.2
+    作用：设置一个「活跃底盘速度」，由定时器持续发布，到期自动归零。
+    安全门：motion_enabled ✓ + confirm_agent_motion ✓
+    返回：{"ok":true, "message":"base velocity active for 1.00s",
+           "data":{"linear_x":0.1,"angular_z":0.0,"duration_sec":1.0}}
+    ★★ 这是 mock 和 Gazebo 下唯一能完整验证闭环的运动工具。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 5. base_relative                            danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"base_relative", "distance_m":0.1}
+    参数：distance_m，夹紧到 ±max_base_relative_distance_m（默认 0.30）
+    作用：★不直接控制底盘，而是转发一条 JSON 到
+          /arachne/grasp_task/base_command：
+            {"command":"drive_relative", "distance_m":0.1}
+    安全门：motion_enabled ✓ + confirm_agent_motion ✓
+    ★★ 依赖 grasp_task_server 正在运行，否则指令发出去没人接。
+       agent_bridge 【不会】告诉你没人接——它照样返回 ok:true。
+       ★ 你的 Agent 必须自己通过 /arachne/grasp_task/base_state 确认。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 6. base_turn                                danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"base_turn", "angle_deg":10.0}
+      或：{"tool":"base_turn", "angle_rad":0.1745}   （自动转成度）
+    参数：angle_deg，夹紧到 ±max_base_relative_yaw_deg（默认 30.0）
+    作用：转发 {"command":"turn_relative","angle_deg":10.0}
+    安全门与依赖：同 base_relative
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 7. arm_cartesian_jog                        danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON 三种写法：
+      {"tool":"arm_cartesian_jog", "axis":"z", "distance_m":0.01}
+      {"tool":"arm_cartesian_jog", "x":0.01, "y":0.0, "z":0.02}
+      {"tool":"arm_cartesian_jog", "vector":[0.01, 0.0, 0.02]}
+    参数：
+      axis         "x"/"y"/"z"（base_link 坐标系）
+      sign         方向，默认 1.0
+      distance_m   位移，缺省时用 max_arm_cartesian_step_m
+      speed_m_s    速度，默认 arm_cartesian_speed_m_sec（0.015 m/s）
+      duration_sec 可显式指定，否则 = 距离 / 速度
+    夹紧：位移模长 > max_arm_cartesian_step_m（默认 0.03 m）时按比例缩放
+    作用：★★算法是这样的——
+          ① 读当前 6 关节角（要求新鲜，见下方"新鲜度检查"）
+          ② 构造 6 维 twist 向量，前 3 维 = 位移/时长，后 3 维（角速度）= 0
+          ③ 用数值差分求 6×6 雅可比矩阵（每个关节 +1e-5 扰动做 FK）
+          ④ 阻尼最小二乘解关节速度：
+               q̇ = Jᵀ · (J·Jᵀ + λ²·I)⁻¹ · twist
+               其中 λ = arm_velocity_damping（默认 0.08）
+          ⑤ 峰值限速到 arm_velocity_max_joint_speed_rad_sec（默认 0.18）
+          ⑥ 激活为「活跃机械臂速度」，由 80 Hz 定时器持续发布
+    安全门：motion_enabled ✓ + confirm_agent_motion ✓
+    ★ 数学原理：阻尼最小二乘（DLS / Levenberg-Marquardt）逆运动学。
+      加 λ²I 是为了在奇异位形附近避免关节速度爆炸——这是牺牲少量
+      末端精度换取数值稳定性的经典做法。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 8. arm_joint_jog                            danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"arm_joint_jog", "joint":"wrist3_joint", "delta_rad":0.03}
+    参数：
+      joint      关节标识，支持 4 种写法：
+                   规范名   "wrist3_joint"
+                   带前缀   "aubo_wrist3_joint"
+                   J 记号   "J6"（1-based）
+                   索引     0-5 或 "0"-"5"
+      delta_rad  相对角度，夹紧到 ±max_arm_joint_step_rad（默认 0.12）
+      speed_rad_s  默认 arm_joint_speed_rad_sec（0.06）
+      duration_sec 可显式指定，否则 = |delta| / speed
+    作用：只让一个关节动，速度 = delta / duration，其余关节速度为 0。
+    安全门：motion_enabled ✓ + confirm_agent_motion ✓
+
+    6 个关节的规范名与别名（agent_bridge.py:23-30）：
+      索引 0  shoulder_joint  ← aubo_shoulder_joint
+      索引 1  upperArm_joint  ← aubo_upperArm_joint, upper_arm_joint
+      索引 2  foreArm_joint   ← aubo_foreArm_joint, fore_arm_joint
+      索引 3  wrist1_joint    ← aubo_wrist1_joint
+      索引 4  wrist2_joint    ← aubo_wrist2_joint
+      索引 5  wrist3_joint    ← aubo_wrist3_joint
+      ★ 注意大小写：upperArm 和 foreArm 是驼峰！写成 upperarm 会失败。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 9. gripper                                  danger: motion           │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"gripper", "command":"open"}
+      或：{"tool":"open_gripper"}  / {"tool":"close_gripper"}
+    参数：command 必须是 "open" / "close" / "stop" 之一，否则报错
+    作用：发 String 到 /arachne/gripper/command
+    安全门：motion_enabled ✓ + confirm_agent_motion ✓
+    ★ 这是唯一一个在 mock 和 Gazebo 下都有效的「非底盘」运动工具。
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 10. aubo_teach                              danger: mode_change      │
+  └──────────────────────────────────────────────────────────────────────┘
+    JSON：{"tool":"aubo_teach", "enabled":true}
+    参数：enabled（布尔）
+    作用：发 "teach_on" / "teach_off" 到 /arachne/aubo/teach_command
+    安全门：★★★三重门——
+            motion_enabled ✓ + confirm_agent_motion ✓
+            + allow_mode_change ✓（默认 false，且 launch 里默认也是 false）
+    ★ 示教/自由驱动模式会让机械臂"泄力"，人可以手动拖动。
+      在真机上误触发这个 = 机械臂突然软掉、负载砸下来。
+      ★★ 强烈建议：你的 Agent 永远不要调用这个工具。
+         把它从你给 LLM 的工具清单里删掉。
+
+5.7 ★★ 安全机制的四层设计
+--------------------------------------------------------------------------------
+
+  【第一层】开关门控（_require_motion_allowed，agent_bridge.py:323-327）
+      所有 danger=motion 的工具，进入前必须通过：
+        motion_enabled == true       否则抛 PermissionError
+        confirm_agent_motion == true 否则抛 PermissionError
+      aubo_teach 额外需要 allow_mode_change == true
+      ★ 三个开关默认全 false，且 launch 文件默认也全 false。
+        必须在命令行显式 :=true 才能生效。
+
+  【第二层】参数硬夹紧（每个工具内部）
+      即使你发 linear_x=100，也会被 _clamp 到 0.20。
+      即使你发 duration_sec=9999，也会被夹到 2.0。
+      ★ 夹紧是静默的——不报错，只是把值改小。
+        你的 Agent 要从返回的 data 字段读实际生效值，
+        而不是假设发什么就是什么。
+
+  【第三层】超时自动归零（_publish_active_motion，agent_bridge.py:581-600）
+      桥内部维护 active_until 时间戳，一个 80 Hz 定时器
+      （arm_velocity_publish_rate=80.0）持续做：
+        · 如果当前时间 > active_until → 清空状态，发零速给底盘和机械臂
+        · 否则 → 重复发布当前活跃速度
+      ★★ 这是「死人开关」（deadman switch）设计：
+         即使你的 Agent 进程崩溃、网络断开，机器人也会在
+         duration_sec 到期后自动停下，最长 2 秒。
+      ★ 副作用：底盘速度指令是【持续发布】的，不是发一次就完。
+        这符合 ROS 惯例（cmd_vel 通常要持续发，否则驱动会超时保护）。
+
+  【第四层】关节状态新鲜度检查（_current_arm，agent_bridge.py:525-539）
+      两个机械臂工具执行前必须拿到「新鲜」的关节状态：
+        · 6 个关节必须全部齐全，否则抛 "no complete Aubo joint state"
+        · 如果 require_fresh_joint_states=true（默认），
+          状态年龄必须 ≤ fresh_state_timeout_sec（默认 2.0 秒），
+          否则抛 "Aubo joint state is stale: X.XXs"
+      ★★ 这就是为什么 Gazebo 下机械臂工具必然失败（没有 /joint_states）。
+      ★ 如果你要在 Gazebo 下强行用这两个工具，可以设
+        require_fresh_joint_states:=false —— 但【强烈不建议】，
+        因为没有关节状态就无法算雅可比，会拿到全零或错误的结果。
+
+  【额外】敏感信息脱敏（_redacted，agent_bridge.py:712-724）
+      事件发布前，会递归遍历指令内容，把 key 中包含
+      "key" / "token" / "secret" / "password" 的字段值替换成 "<redacted>"。
+      ★ 说明作者预料到 Agent 可能不小心把 API Key 塞进指令里。
+
+5.8 launch 文件暴露的 18 个参数
+--------------------------------------------------------------------------------
+  ros2 launch arachne_agent_bridge agent_bridge.launch.py <参数>:=<值>
+
+  【安全开关，共 3 个】
+    motion_enabled ................... false   ★必须设 true
+    confirm_agent_motion ............. false   ★必须设 true
+    allow_mode_change ................ false   建议保持 false
+
+  【话题重映射，共 8 个】
+    command_topic .................... /arachne/agent/command
+    status_topic ..................... /arachne/agent/status
+    event_topic ...................... /arachne/agent/event
+    tools_topic ...................... /arachne/agent/tools
+    cmd_vel_topic .................... /cmd_vel
+    arm_velocity_command_topic ....... /arachne/aubo/joint_velocity_command
+    gripper_command_topic ............ /arachne/gripper/command
+    base_task_command_topic .......... /arachne/grasp_task/base_command
+
+  【限速参数，共 8 个】
+    max_base_linear_x ................ 0.20   m/s
+    max_base_angular_z ............... 0.35   rad/s
+    max_base_relative_distance_m ..... 0.30   m
+    max_base_relative_yaw_deg ........ 30.0   度
+    arm_cartesian_speed_m_sec ........ 0.015  m/s
+    arm_joint_speed_rad_sec .......... 0.06   rad/s
+    max_arm_cartesian_step_m ......... 0.03   m
+    max_arm_joint_step_rad ........... 0.12   rad
+
+  ⚠⚠ 重要缺口：以下参数在 agent_bridge.py 里声明了，
+     但【launch 文件没有暴露】：
+       odom_topic ........................ /odom        ★★★ 最要命
+       joint_states_topic ................ /joint_states
+       aubo_teach_command_topic .......... /arachne/aubo/teach_command
+       grasp_task_state_topic ............ /arachne/grasp_task/state
+       base_task_state_topic ............. /arachne/grasp_task/base_state
+       aubo_status_topic / base_status_topic / gripper_status_topic
+       safety_state_topic ................ /arachne/safety/state
+       require_fresh_joint_states ........ true
+       fresh_state_timeout_sec ........... 2.0
+       status_publish_period_sec ......... 0.5
+       command_deadman_sec ............... 2.0
+       max_base_command_duration_sec ..... 2.0
+       arm_velocity_publish_rate ......... 80.0
+       arm_velocity_damping .............. 0.08
+       arm_velocity_max_joint_speed_rad_sec  0.18
+
+     ★★★ 后果：在 Gazebo 下你【无法通过 launch 参数】把 odom_topic
+        改成 /gz/odom。
+     ★ 三个绕过办法（推荐程度从高到低）：
+        ① 用 ros2 run + --ros-args -p 直接起节点：
+             ros2 run arachne_agent_bridge agent_bridge --ros-args \
+               -p motion_enabled:=true -p confirm_agent_motion:=true \
+               -p odom_topic:=/gz/odom
+        ② 用话题 remap：
+             ros2 launch arachne_agent_bridge agent_bridge.launch.py \
+               motion_enabled:=true confirm_agent_motion:=true \
+               --ros-args -r /odom:=/gz/odom
+           （remap 在 launch 里对内部节点不一定生效，需实测）
+        ③ 起一个中继节点，把 /gz/odom 转发成 /odom
+             ros2 run topic_tools relay /gz/odom /odom
+           （需安装 topic_tools，最笨但最可靠）
+        ★ 推荐 ①。
+
+5.9 状态快照 JSON 结构（/arachne/agent/status 的内容）
+--------------------------------------------------------------------------------
+  {
+    "stamp": "2026-07-24T17:30:00.123",       ISO 时间戳（毫秒精度）
+    "motion_enabled": false,                   三个安全开关的当前值
+    "confirm_agent_motion": false,
+    "allow_mode_change": false,
+    "active": {                                当前活跃指令
+      "command": "base_velocity",              工具名，空字符串表示无
+      "remaining_sec": 0.73,                   剩余时间
+      "base_velocity": [0.1, 0.0],             [linear_x, angular_z]，空表示无
+      "arm_velocity": []                       6 个关节速度，空表示无
+    },
+    "arm_joints": {                            当前 6 关节角度（规范名为键）
+      "shoulder_joint": -1.5708,
+      "upperArm_joint": 0.2016,
+      ...
+    },
+    "latest": {                                各类缓存状态 + 年龄
+      "odom":        {"age_sec": 0.033, "value": {"x":0.1,"y":0.0,"yaw":0.0}},
+      "joint_states":{"age_sec": 0.033, "value": {"names": [...]}},
+      "aubo_joints": {"age_sec": 0.033, "value": {...}},
+      "base_status": {"age_sec": 0.1,   "value": "..."},
+      "aubo_status": {"age_sec": 0.1,   "value": "..."},
+      "gripper_status":   {...},
+      "safety_state":     {...},
+      "grasp_task_state": {...},
+      "base_task_state":  {...}
+    },
+    "last_result": {                           上一条指令的结果
+      "ok": true,
+      "message": "base velocity active for 1.00s",
+      "data": {...}
+    }
+  }
+
+  ★★ "latest" 里每一项都带 age_sec，这是给你的 Agent 判断
+     「这个数据还能不能信」的依据。
+     建议规则：age_sec > 2.0 的数据不要用于决策。
+
+  ★ odom 的 value 只有 x / y / yaw 三个字段（桥内部做了简化，
+    把四元数转成了偏航角）。没有速度、没有协方差。
+
+5.10 ★ 完整数据流图
+--------------------------------------------------------------------------------
+
+   ┌───────────────────────────────────────────────────────────┐
+   │  你的 mt001_agent 进程（Python，可以不是 ROS 包）          │
+   │  ┌─────────────────────────────────────────────────────┐  │
+   │  │ 1. 接收自然语言："把桌子上的瓶子拿过来"               │  │
+   │  │ 2. 订阅 /arachne/agent/tools 拿到工具清单            │  │
+   │  │ 3. 订阅 /arachne/agent/status 拿到当前状态           │  │
+   │  │ 4. 调用 LLM：人话 + 工具清单 + 状态 → 决策           │  │
+   │  │ 5. 产出 JSON 指令                                    │  │
+   │  └─────────────────────────────────────────────────────┘  │
+   └───────────────────────────────┬───────────────────────────┘
+                                   │ 发布 std_msgs/String
+                                   ↓
+                      /arachne/agent/command
+                                   │
+                                   ↓
+   ┌───────────────────────────────────────────────────────────┐
+   │  arachne_agent_bridge 节点                                 │
+   │                                                            │
+   │  _command_cb                                               │
+   │    ├─ JSON 解析（失败则当作裸工具名）                       │
+   │    ├─ _handle_command                                      │
+   │    │    ├─ 工具名规范化 + 别名映射                          │
+   │    │    ├─ read_only / stop 类 → 直接执行                   │
+   │    │    ├─ motion 类 → _require_motion_allowed（两道开关）  │
+   │    │    ├─ 参数解析 + _clamp 夹紧                          │
+   │    │    └─ 设置 active_* 状态                              │
+   │    ├─ 存 last_result                                       │
+   │    ├─ 发 event（含脱敏后的原始指令）                        │
+   │    └─ 立即发一次 status                                    │
+   │                                                            │
+   │  _publish_active_motion（80 Hz 定时器）                    │
+   │    ├─ 超时？→ 清空 + 发零速 → 返回                         │
+   │    └─ 未超时 → 重复发布活跃速度                            │
+   └───────┬───────────────────────────────┬───────────────────┘
+           │ 发布控制指令                   │ 发布反馈
+           ↓                                ↓
+   ┌───────────────────────┐    ┌──────────────────────────┐
+   │ /cmd_vel              │    │ /arachne/agent/status    │
+   │ /arachne/aubo/        │    │ /arachne/agent/event     │
+   │   joint_velocity_cmd  │    │ /arachne/agent/tools     │
+   │ /arachne/gripper/cmd  │    └──────────┬───────────────┘
+   │ /arachne/aubo/teach   │               │
+   │ /arachne/grasp_task/  │               │ 回到你的 Agent
+   │   base_command        │               │ 形成闭环
+   └───────┬───────────────┘               │
+           │                                │
+           ↓                                │
+   ┌───────────────────────────────────┐   │
+   │ 执行层（三选一）                   │   │
+   │  · hardware_mock（假硬件）         │   │
+   │  · Gazebo（仿真物理）              │   │
+   │  · 真实硬件驱动                    │   │
+   └───────┬───────────────────────────┘   │
+           │ 发布状态                        │
+           ↓                                 │
+   /odom, /joint_states, /arachne/hardware/*─┘
+   （被 agent_bridge 订阅并缓存）
+
+
+================================================================================
+第六章  ★重点：全部 ROS2 对外接口清单
+================================================================================
+
+【图例】
+  可用性：[真] 仅真机  [仿] 仅 Gazebo  [M] mock 可用  [通] 三者通用
+
+6.1 控制类话题 —— 底盘
+--------------------------------------------------------------------------------
+  /cmd_vel                        geometry_msgs/Twist          [通]
+      ★ 全系统最重要的底盘接口。mock、Gazebo、真机都吃这个。
+      限幅：mock ±0.8/±1.4，Gazebo ±0.8/±1.4，agent_bridge 输出 ±0.20/±0.35
+  /arachne/cmd_vel_raw            geometry_msgs/Twist          [真]
+      未经安全闸门过滤的原始速度（safety_cmd_vel_gate 的输入）
+  /arachne/base/reset             服务                          [仿]
+      把仿真机器人重置到出生点
+  /arachne/demo/reset             std_msgs/Empty                [仿]
+      Gazebo 演示重置（被 gazebo_demo_control_bridge 订阅）
+
+6.2 控制类话题 —— 机械臂
+--------------------------------------------------------------------------------
+  /arachne/aubo/joint_velocity_command   Float64MultiArray     [真]
+      ★★ 6 个关节的速度指令。agent_bridge 唯一的机械臂出口。
+      ★★ mock 不订阅它，Gazebo 也不订阅它 → 仿真下无效
+  /arachne/gui_joint_states              sensor_msgs/JointState [仿]
+      ★★★ Gazebo 下控制机械臂的正确入口（见 4.6）
+      被 gazebo_demo_control_bridge 订阅
+  /arachne/gazebo/<joint>/command        std_msgs/Float64       [仿]
+      ★ 6 个话题，Gazebo 位置控制。经 ros_gz_bridge 转成 gz.msgs.Double
+      joint ∈ {aubo_shoulder_joint, aubo_upperArm_joint, aubo_foreArm_joint,
+               aubo_wrist1_joint, aubo_wrist2_joint, aubo_wrist3_joint}
+  /joint_trajectory_controller/joint_trajectory  JointTrajectory [M]
+  /aubo_arm_controller/joint_trajectory          JointTrajectory [M]
+      ★ mock 订阅这两个。标准 ros2_control 轨迹接口。
+  /model/arachne/joint_trajectory        gz.msgs.JointTrajectory [仿]
+      gazebo_demo_control_bridge 也向这个 gz 话题发轨迹
+  /arachne/aubo/teach_command            std_msgs/String        [真][M]
+      "teach_on" / "teach_off"，示教模式切换
+  /arachne/aubo/move_joint               Action (AuboMoveJoint) [真]
+      ★ 全系统唯一的 action。带反馈的关节运动。
+  /arachne/default_joint_states          sensor_msgs/JointState
+  /arachne/display/joint_states          sensor_msgs/JointState
+  /arachne/teach_visualization/joint_states  JointState
+
+6.3 控制类话题 —— 夹爪
+--------------------------------------------------------------------------------
+  /arachne/gripper/command        std_msgs/String              [通]
+      ★★ "open" / "close" / "stop"，或数字（0-19656 的角度值）
+      三种环境都有效：mock 订阅、gazebo_demo_control_bridge 订阅、
+      真机驱动订阅
+  /arachne/gripper/open           服务                          [真]
+  /arachne/gripper/close          服务                          [真]
+  /arachne/gripper/stop           服务                          [真]
+  /arachne/gripper/position       状态
+  /arachne/gripper/angle_degrees  状态
+  /arachne/gripper/joint_states   sensor_msgs/JointState
+  /arachne/gazebo/ms42dc_left_finger/command    gz.msgs.Double [仿]
+  /arachne/gazebo/ms42dc_right_finger/command   gz.msgs.Double [仿]
+
+6.4 控制类服务 —— 任务编排
+--------------------------------------------------------------------------------
+  ▪ 抓取任务（grasp_task_server）—— 全部 std_srvs/Trigger
+      /arachne/grasp_task/start          启动抓取
+      /arachne/grasp_task/stop           停止
+      /arachne/grasp_task/cancel         取消
+      /arachne/grasp_task/status         查询
+      /arachne/grasp_task/preflight      起飞前检查
+      /arachne/grasp_task/restore        恢复
+      /arachne/grasp_task/base_status    底盘状态
+      /arachne/grasp_task/base_stop      底盘停止
+      话题：/arachne/grasp_task/base_command  ★agent_bridge 转发目标
+            /arachne/grasp_task/state
+            /arachne/grasp_task/base_state
+            /arachne/grasp_task/event
+
+  ▪ 道路清扫（road_cleanup_task_server）
+      /arachne/road_cleanup/start、stop、pause、preflight、
+      return_home、status
+      话题：/arachne/road_cleanup/state、event
+
+  ▪ 分步清扫（step_cleanup_demo）
+      /arachne/step_cleanup/start、stop、preflight、status
+      话题：/arachne/step_cleanup/state、event
+
+  ▪ 演示编排（demo_orchestrator）
+      /arachne/demo/start_camera、stop_camera、
+      start_road_cleanup、pause_road_cleanup、start_visual_grasp、
+      return_home、preflight、stop、status
+      话题：/arachne/demo/state
+
+  ▪ 动作序列（sequence_executor）
+      /arachne/sequence/open_gripper、close_gripper、
+      demo_pick、demo_nav_pick、stop
+      话题：/arachne/sequence/command、status
+
+  ▪ VLA 翻译器（action_chunk_translator）
+      /arachne/vla/translator/stop     服务
+      /arachne/vla/action_chunk        话题（输入）
+      /arachne/vla/translator/status   话题
+
+  ▪ 城市垃圾分拣（urban_trash_sorting_demo）
+      /arachne/urban_trash/return_home  服务
+      话题：/arachne/urban_trash/base_path、markers、roi_cloud
+
+  ▪ 抓取预览流水线（grasp_preview_pipeline）
+      /arachne/grasp_preview/execute_real、execute_real_now、
+      restart_search、real_search_scan
+      话题：/arachne/grasp_preview/annotated_image、markers、path、
+            roi_cloud、joint_states
+
+6.5 安全类接口
+--------------------------------------------------------------------------------
+  服务（全部 std_srvs/Trigger）：
+      /arachne/safety/enable           启用（→ manual）
+      /arachne/safety/disable          禁用（→ disabled）
+      /arachne/safety/estop            急停（→ estop）
+      /arachne/safety/recover          恢复（estop → disabled）
+      /arachne/safety/set_manual       手动模式
+      /arachne/safety/set_autonomous   自主模式
+  话题：
+      /arachne/safety/state    std_msgs/String   格式 "状态:原因"
+      /arachne/safety/enabled  std_msgs/String   manual/autonomous 时 true
+
+  ★ 状态机规则：estop 状态只能转到 disabled 或保持 estop。
+    从急停恢复必须走 recover，不能直接 enable。
+
+6.6 状态反馈类话题
+--------------------------------------------------------------------------------
+  /odom                             nav_msgs/Odometry      [真][M]
+      ★ mock 和真机发这个
+  /gz/odom                          nav_msgs/Odometry      [仿]
+      ★★ Gazebo 发这个。与 /odom 不通用，这是最常踩的坑。
+  /joint_states                     sensor_msgs/JointState [真][M]
+      ★★ Gazebo 【不发】这个（桥没接）
+  /arachne/base/joint_states        sensor_msgs/JointState
+  /arachne/hardware/base_status     std_msgs/String        [真][M]
+  /arachne/hardware/aubo_status     std_msgs/String        [真][M]
+  /arachne/hardware/gripper_status  std_msgs/String        [真][M]
+  /arachne/teach/status             std_msgs/String
+  /arachne/acceptance/status        std_msgs/String
+  TF / TF_static                    tf2_msgs/TFMessage     [真][M]
+      ★ mock 有 TransformBroadcaster；Gazebo 桥【没接 TF】
+
+6.7 传感器类话题
+--------------------------------------------------------------------------------
+  /camera/color/image_raw        sensor_msgs/Image        [真]
+  /camera/color/camera_info      sensor_msgs/CameraInfo   [真]
+  /camera/depth/image_raw        sensor_msgs/Image        [真]
+  /camera/depth/image_color      sensor_msgs/Image        [真]
+  /camera/depth/camera_info      sensor_msgs/CameraInfo   [真]
+  /camera/points                 sensor_msgs/PointCloud2  [真]
+  /arachne/debug/depth_points    sensor_msgs/PointCloud2  [真]
+  /arachne/perception/taco_instances   感知结果（YOLO 检测的垃圾实例）[真]
+
+  ★★★ 重要：当前 Gazebo 演示【没有任何传感器话题】。
+     原因：gazebo_autopick_demo 的 URDF 设了 with_ee_camera:=false，
+     且 ros_gz_bridge 没有桥接任何相机/雷达话题。
+     → 你的 Agent 在 Gazebo 里【拿不到视觉输入】。
+     → 详见【9.3】的应对方案。
+
+6.8 可视化类话题
+--------------------------------------------------------------------------------
+  /arachne/model/direction_markers        visualization_msgs/MarkerArray
+  /arachne/grasp_preview/markers          MarkerArray
+  /arachne/grasp_preview/path             nav_msgs/Path
+  /arachne/grasp_preview/roi_cloud        PointCloud2
+  /arachne/grasp_preview/annotated_image  Image
+  /arachne/urban_trash/markers            MarkerArray
+  /arachne/gazebo_camera/follow_offset    相机跟随偏移
+  /arachne/camera_yaw                     相机偏航
+
+
+================================================================================
+第七章  ★重点：gazebo_autopick_planner.py —— 你要替换的靶子
+================================================================================
+
+7.1 基本信息
+--------------------------------------------------------------------------------
+  路径：src/arachne_demo/arachne_demo/gazebo_autopick_planner.py
+  规模：759 行，纯 Python，★零第三方依赖（连 numpy 都不用）
+  节点名：gazebo_autopick_planner
+  类名：GazeboAutoPickPlanner
+
+  源码里的文档字符串（第 70-79 行）值得逐句读：
+    "Known-world autonomy validation for the Gazebo showroom.
+     This node intentionally keeps the planner dependency-free. The base uses
+     a continuously refreshed grid A* path over the known SDF showroom
+     geometry, then follows it with a pure-pursuit style controller. The arm
+     does not play a prewritten trajectory: every control tick computes a
+     target joint pose from the current base pose and the target object pose,
+     then rate-limits the command toward that pose. This is a simulation
+     validation layer; the same launch contract can later be backed by
+     MoveIt2 and ros2_control."
+
+  ★ 关键词 "Known-world"（已知世界）—— 作者自己承认这是「上帝视角」方案。
+  ★ 关键词 "This is a simulation validation layer"（这只是仿真验证层）
+    —— 作者自己就说了这不是最终方案。
+  ★★ 这段话就是你项目立项的最佳引用：作者明确留出了升级空间。
+
+7.2 它现在怎么工作
+--------------------------------------------------------------------------------
+
+  ▪ 输入
+      只订阅一个话题：/gz/odom（底盘位姿）
+      ★★ 没有任何感知输入。没有相机、没有雷达、没有点云。
+
+  ▪ 输出（4 类）
+      /cmd_vel ..................... 底盘速度
+      /arachne/gui_joint_states .... 机械臂关节角（JointState）
+      /arachne/gazebo/<joint>/command × 6 ... 机械臂关节角（Float64，冗余发送）
+      /arachne/gripper/command ..... 夹爪
+
+  ▪ 世界模型：★★★ 完全硬编码
+      目标物体坐标写死在参数默认值里：
+        target_x = 3.40, target_y = -2.35, target_z = 0.38
+        approach_x = 2.62, approach_y = -2.35, approach_standoff = 0.76
+      8 个障碍物写死在 _known_obstacles() 方法里（第 177-187 行）：
+        demo_pedestal    (-1.20, -1.40)  半径 0.58
+        soft_target_box  ( 1.00, -1.50)  半径 0.45
+        marker_column    (-2.00,  1.40)  半径 0.38
+        slalom_marker_a  (-1.40,  2.10)  半径 0.32
+        slalom_marker_b  (-0.40,  1.55)  半径 0.32
+        slalom_marker_c  ( 0.60,  2.10)  半径 0.32
+        work_table       ( 2.45,  1.70)  半径 0.62
+        inspection_crate ( 3.45,  0.25)  半径 0.50
+      场地边界写死：bounds = (-5.4, 5.4, -3.55, 3.55)
+
+      ★★ 这些坐标是【手工从 arachne_showroom.sdf 抄过来的】。
+         world 文件一改，这里就失效，而且不会报错——机器人会撞上去。
+
+  ▪ 底盘导航算法
+      栅格 A*（grid_resolution = 0.16 m）
+        · _world_to_cell / _cell_to_world 做坐标转换
+        · _blocked 判断格子是否被障碍占据
+          （膨胀半径 = robot_radius 0.48 + obstacle_clearance 0.18）
+        · _nearest_free_cell 处理起点/终点在障碍里的情况
+        · _heuristic 欧氏距离启发
+        · _reconstruct 回溯路径
+        · _smooth_path + _segment_is_clear 做路径平滑（视线剪枝）
+      纯追踪（Pure Pursuit）跟随
+        · lookahead_distance = 0.46 m
+        · linear_speed = 0.42 m/s，angular_speed = 1.05 rad/s
+        · position_tolerance = 0.12 m，yaw_tolerance = 0.16 rad
+      周期重规划：replan_period = 0.75 秒
+      控制频率：publish_rate = 30 Hz
+
+  ▪ 机械臂算法：★自写正/逆运动学
+      正运动学（FK）：
+        用 4×4 齐次变换矩阵链乘，全部用嵌套 list 手写实现
+        （_matmul、_translation、_rpy_matrix、_rotation_x/y/z）
+        DH 参数写死在 AUBO_JOINT_ORIGINS（6 组 xyz + rpy）：
+          (0.0, 0.0, 0.122),   rpy (0, 0, π)
+          (0.0, 0.1215, 0.0),  rpy (-π/2, -π/2, 0)
+          (0.408, 0.0, 0.0),   rpy (-π, 0, 0)
+          (0.376, 0.0, 0.0),   rpy (π, 0, π/2)
+          (0.0, 0.1025, 0.0),  rpy (-π/2, 0, 0)
+          (0.0, -0.094, 0.0),  rpy (π/2, 0, 0)
+        机械臂安装：ARM_MOUNT_XYZ = (0.22, 0.0, 0.105)
+                    ARM_MOUNT_RPY = (0.0, 0.0, π/2)
+        末端偏移：GRASP_FRAME_OFFSET = 0.165 m
+        TOOL0_RPY = (0.0, 0.0, π/2)
+      逆运动学（IK）：
+        _solve_ik_position —— 只解位置（3 自由度），不管姿态
+        方法：有限差分雅可比 + 阻尼最小二乘迭代
+              IK_MAX_STEP = 0.08，IK_DAMPING = 0.08，IK_EPSILON = 1e-4
+        ★ 只用 3×3 的位置雅可比 + _inverse_3x3 手写求逆
+      ★★ 开环控制：不读 /joint_states，自己在 self.current_arm 里
+         维护「我以为的关节角」，每周期向目标插值
+         （arm_joint_speed = 0.55 rad/s，arm_tolerance = 0.045 m）
+
+  ▪ 状态机（self.state 和 self.arm_phase 同步推进）
+      wait_odom  → 等第一帧里程计
+        ↓
+      navigate   → A* 路径跟随，到达 approach 点
+        ↓
+      align      → 原地转向对准目标
+        ↓
+      pre_grasp  → 机械臂移到目标上方
+        ↓
+      grasp      → 机械臂下探到目标
+        ↓
+      close      → 闭合夹爪
+        ↓
+      lift       → 抬起
+        ↓
+      return     → 回 HOME 姿态
+        ↓
+      done       → 结束
+
+      ★ 每个阶段的切换条件是「末端位置误差 < arm_tolerance（0.045 m）」
+        或超时。
+
+  ▪ 关键姿态常量
+      HOME_POSE  = [-1.5707963267949, 0.201570428261868, 1.65970467002488,
+                    0.485178041391533, 1.67675136677345, 0.76432946885334]
+      READY_POSE = [1.38, -0.22, -1.10, 0.12, -1.38, 0.0]
+
+  ▪ 其他参数
+      auto_start = True   ★启动后自动开跑，不等任何触发
+
+7.3 它的六个根本缺陷
+--------------------------------------------------------------------------------
+  ① 零感知
+     不订阅任何传感器。目标坐标是人给的，不是看到的。
+     → 目标一旦移动，它完全不知道。
+
+  ② 零语义
+     不理解「瓶子」是什么，只知道 (3.40, -2.35, 0.38) 这个数。
+     → 无法处理「把红色的那个拿过来」。
+
+  ③ 世界模型手工同步
+     8 个障碍物坐标是从 SDF 手抄的，两处数据没有任何自动同步机制。
+     → 场景一改就失效，且静默失效。
+
+  ④ 单一固定任务
+     只能做「走到瓶子那里抓起来」这一件事。
+     换目标要改参数重启，换任务要改代码。
+
+  ⑤ 无失败恢复
+     状态机是单向的，没有任何回退分支。
+     抓空了、撞上了、IK 解不出来——它不知道，会继续往下走。
+
+  ⑥ 开环控制
+     不读关节反馈，假设指令一定被完美执行。
+     仿真里能糊弄过去，真机上是安全隐患。
+
+7.4 ★★★ 你的 Agent 怎么替换它
+--------------------------------------------------------------------------------
+
+  ▪ 替换的物理操作：一个 launch 参数
+        ros2 launch arachne_demo gazebo_autopick_demo.launch.py \
+            with_autopick:=false
+
+      这会让 autopick 节点不启动，Gazebo 里的机器人变成「无人驾驶」状态，
+      等着你的 Agent 接管。其余节点（spawn、bridge、相机跟随、
+      相机轨道、★demo_control_bridge）照常运行。
+
+      ★★ 特别注意：demo_control_bridge 是【无条件启动】的
+         （launch 文件里它没有 condition），这正是你需要的——
+         它提供了 /arachne/gui_joint_states 和 /arachne/gripper/command
+         这两条通往 Gazebo 的控制通路。
+
+  ▪ 接管后你需要自己提供的能力（按优先级排序）
+
+      【必须，第一阶段】底盘移动
+        方案：直接发 /cmd_vel，或走 agent_bridge 的 base_velocity
+        ★ 走 agent_bridge 更好——白拿限速、超时归零、状态反馈三件套
+        ★ 记得处理 odom 话题名（/gz/odom vs /odom，见 5.8）
+
+      【必须，第一阶段】夹爪
+        方案：发 /arachne/gripper/command，或走 agent_bridge 的 gripper 工具
+        ★ 两条路等价，agent_bridge 最终也是发这个话题
+
+      【必须，第二阶段】机械臂
+        ★★ 不能用 agent_bridge 的机械臂工具（Gazebo 下无效，见 4.5）
+        方案：发 sensor_msgs/JointState 到 /arachne/gui_joint_states
+        你需要自己实现：
+          · FK（算末端在哪）—— 可以复用
+            arachne_operator.real_hardware_acceptance_test.AuboI5Kinematics
+            （agent_bridge 就是这么干的），或者抄 autopick 里的实现
+          · IK（算关节角）—— 抄 autopick 的 _solve_ik_position 最省事
+          · 限速插值 —— 抄 autopick 的 _step_arm_toward_target
+        ★ 建议：把 autopick 里的运动学部分【原样搬到你的仓库】当工具库，
+          只重写决策层。这样你的工作量集中在真正有价值的地方。
+
+      【可选，第三阶段】感知
+        ★ 当前 Gazebo 没有相机（见 6.7、9.3）。
+        三个选项：
+          A. 不做感知，用「上帝视角」提供物体列表给 LLM
+             （诚实地在文档里标注这是简化假设）
+          B. 给 URDF 加相机 + 给 ros_gz_bridge 加图像话题，
+             接 YOLO（yolo_workspace 里有现成权重）
+          C. 用 Gazebo 的场景状态服务查询物体真实位姿，
+             模拟「完美感知」
+        ★ 两个月项目建议先做 A，有余力再做 B。
+
+  ▪ 两条实现路线的对比（对应你 CLAUDE.md 里记的两条路）
+
+      ┌──────────────────────────────────────────────────────────────┐
+      │ 路线一：低层遥操（Agent 直接发点动指令）                      │
+      └──────────────────────────────────────────────────────────────┘
+        做法：with_autopick:=false，Agent 通过 agent_bridge 发
+              base_velocity / gripper，通过 gui_joint_states 控机械臂
+        优点：· 完全掌控，每一步都是 Agent 决策
+              · 在 mock 下就能验证大部分链路
+              · 能充分展示 LLM 的分解能力（"前进 → 转向 → 伸手 → 闭合"）
+        缺点：· 需要自己实现 IK 与运动规划
+              · LLM 调用次数多，延迟累积
+              · 容易在低层细节上耗掉两个月
+        ★ 适合：第一个可演示版本
+
+      ┌──────────────────────────────────────────────────────────────┐
+      │ 路线二：高层任务编排（Agent 调 grasp_task_server）            │
+      └──────────────────────────────────────────────────────────────┘
+        做法：Agent 只负责「选哪个目标、要不要靠近、放弃还是重试」，
+              具体抓取交给已验证的 grasp_task_server
+        优点：· 复用真机验证过的抓取逻辑，成功率有保障
+              · LLM 只在决策点介入，延迟低
+              · 更接近 BUMBLE 那种「分层技能」的架构
+        缺点：· grasp_task_server 依赖真实感知（YOLO + 深度相机），
+                在当前 Gazebo 环境里跑不起来
+              · 需要额外启动 grasp_task_server 节点
+        ★ 适合：最终形态，但需要先解决 Gazebo 感知问题
+
+      ★★ 建议走【混合路线】——
+         · 底盘用高层（base_relative / base_turn，走 grasp_task_server）
+         · 机械臂用低层（gui_joint_states + 自己的 IK）
+         · 感知先用「上帝视角」桩（stub），架构上留好接口
+         这样两个月内能出一个完整可演示的东西，
+         同时架构上对接真实感知是开放的。
+
+  ▪ 你的 Agent 相对 autopick 的六个改进点（写进 README/论文）
+      autopick 的缺陷            →  你的 Agent 的改进
+      ────────────────────────────────────────────────────────────
+      ① 零感知                   →  接入感知接口（哪怕先是桩）
+      ② 零语义                   →  LLM 理解自然语言指令
+      ③ 世界模型手工同步          →  从场景动态获取/由 LLM 维护
+      ④ 单一固定任务             →  多任务，任务由人话定义
+      ⑤ 无失败恢复               →  LLM 观察状态，判断重试/换目标/放弃
+      ⑥ 开环控制                 →  闭环，读 status 后再决策
+
+      ★★ 第 ⑤ 条是你的 Agent 最有说服力的差异点，
+         也正好对应 docs/step_demo_plan.md 里作者自己吐槽的痛点。
+         建议把「失败恢复」设计成你项目的核心卖点。
+
+
+================================================================================
+第八章  ★重点：真机 / 仿真 / mock 三分类与最小联调命令
+================================================================================
+
+8.1 三种运行环境对比
+--------------------------------------------------------------------------------
+
+  ┌──────────────┬──────────────┬──────────────┬──────────────────┐
+  │              │ mock 假硬件   │ Gazebo 仿真   │ 真机              │
+  ├──────────────┼──────────────┼──────────────┼──────────────────┤
+  │ 启动命令      │ mock_bringup │ gazebo_      │ real_bringup     │
+  │              │              │ autopick_demo│                  │
+  │ GPU 需求      │ 无            │ 有（可软渲染）│ 无（Jetson 上跑） │
+  │ 启动耗时      │ < 1 秒        │ 10-30 秒     │ 分钟级            │
+  │ 物理引擎      │ 无（纯积分）  │ 有           │ 真实物理          │
+  │ 碰撞检测      │ 无            │ 有           │ 有（会撞坏）      │
+  │ 里程计话题    │ /odom        │ /gz/odom  ★  │ /odom            │
+  │ /joint_states│ 有 ★          │ 无 ★★        │ 有                │
+  │ 机械臂协议    │JointTrajectory│ 位置(Float64)│ 速度(F64MultiArr)│
+  │ 相机          │ 无            │ 无 ★         │ 有                │
+  │ 激光雷达      │ 无            │ 无（URDF 有  │ 有                │
+  │              │              │ 但桥没接）    │                  │
+  │ 危险性        │ 零            │ 零           │ 高                │
+  └──────────────┴──────────────┴──────────────┴──────────────────┘
+
+8.2 ★★ agent_bridge 十个工具的三环境可用性矩阵
+--------------------------------------------------------------------------------
+
+  ┌──────────────────┬────────┬──────────┬────────┬───────────────────────┐
+  │ 工具              │ mock   │ Gazebo   │ 真机   │ 说明                   │
+  ├──────────────────┼────────┼──────────┼────────┼───────────────────────┤
+  │ get_robot_state  │ ✅完整  │ ⚠部分    │ ✅完整 │ Gazebo 下 odom/joint  │
+  │                  │        │          │        │ 都拿不到（需重映射）    │
+  │ safe_stop        │ ✅     │ ✅       │ ✅     │ 纯发零速，永远有效      │
+  │ arm_stop         │ ✅     │ ✅       │ ✅     │ 同上                   │
+  │ base_velocity    │ ✅★    │ ✅★      │ ✅     │ ★★三环境唯一完整闭环   │
+  │ gripper          │ ✅     │ ✅       │ ✅     │ ★三环境都订阅这个话题   │
+  │ base_relative    │ ❌     │ ❌       │ ✅     │ 需 grasp_task_server   │
+  │ base_turn        │ ❌     │ ❌       │ ✅     │ 需 grasp_task_server   │
+  │ arm_cartesian_jog│ ❌     │ ❌       │ ✅     │ mock/Gazebo 不订阅     │
+  │                  │        │          │        │ joint_velocity_command│
+  │ arm_joint_jog    │ ❌     │ ❌       │ ✅     │ 同上                   │
+  │ aubo_teach       │ ⚠      │ ❌       │ ✅     │ mock 只改内部标志位     │
+  └──────────────────┴────────┴──────────┴────────┴───────────────────────┘
+
+  失败模式详解（★★这部分极其重要，决定你 Agent 的设计）：
+
+    · base_relative / base_turn 在 mock/Gazebo 下：
+      agent_bridge 会返回 ok:true「command forwarded」，
+      但 /arachne/grasp_task/base_command 上没有订阅者，指令消失。
+      ★★ 这是【静默失败】——你的 Agent 会以为成功了。
+      ★ 解决：额外启动 grasp_task_server（见 8.4 的组合 C）
+
+    · arm_cartesian_jog / arm_joint_jog 在 mock 下：
+      mock 【有】发 /joint_states，所以新鲜度检查能通过。
+      指令会成功计算出关节速度并发布到
+      /arachne/aubo/joint_velocity_command，agent_bridge 返回 ok:true，
+      但 mock 不订阅这个话题，所以假机械臂不动。
+      ★★ 也是【静默失败】，而且比上面那个更隐蔽。
+
+    · arm_cartesian_jog / arm_joint_jog 在 Gazebo 下：
+      会抛 RuntimeError "no complete Aubo joint state"（因为无 /joint_states）
+      ★ 这个反而是【显式失败】，agent_bridge 会返回 ok:false。
+
+  ★★★ 这张表的结论：
+     你的 Agent 在设计时【绝不能假设 ok:true 就等于机器人真的动了】。
+     必须通过 /arachne/agent/status 里的 latest.odom / arm_joints
+     实际观察状态变化来确认。
+     ★ 这个「发指令 → 观察 → 确认」的闭环，本身就是你 Agent 的核心价值，
+       也正好是 autopick 缺的东西。
+
+8.3 无硬件可用的检查命令（不启动任何节点，秒级完成）
+--------------------------------------------------------------------------------
+  这些命令只做代码加载与语法验证，不碰任何硬件：
+
+    ros2 run arachne_operator arachne check offline
+    ros2 run arachne_operator arachne check entrypoints
+    ros2 run arachne_operator teach_panel --headless-check
+    ros2 run arachne_operator grasp_task_server --dry-run-check
+    ros2 run arachne_operator road_cleanup_task_server --dry-run-check
+    ros2 run arachne_operator step_cleanup_demo --dry-run-check
+    ros2 run arachne_sensors depth_to_pointcloud --dry-run-check
+    python3 -m py_compile <任何改过的 python 文件>
+
+  ★ 编译完成后第一件事就应该跑
+    `ros2 run arachne_operator arachne check entrypoints`，
+    它会验证所有入口点都能 import 且都注册进了 ros2 pkg executables。
+
+8.4 ★★★ 无硬件联调的最小命令组合
+--------------------------------------------------------------------------------
+
+  ⚠ 每个新终端都必须先做环境准备。推荐用官方脚本：
+      source /root/autodl-tmp/Arachne/scripts/env/arachne_env.sh
+    或者用你现在记的三条（等价但覆盖面窄一些）：
+      export PATH=$(echo $PATH | tr ':' '\n' | grep -v miniconda | paste -sd ':')
+      source /opt/ros/humble/setup.bash
+      source /root/autodl-tmp/Arachne/install/setup.bash
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 组合 A：最小验证（3 个终端）—— ★你的第一个里程碑                     │
+  │ 验证目标：Agent 指令能驱动底盘，能观察到 odom 变化                    │
+  │ 资源需求：零 GPU、零渲染、内存 < 500MB                               │
+  └─────────────────────────────────────────────────────────────────────┘
+
+    【终端 1】启动假硬件
+      ros2 launch arachne_hardware mock_bringup.launch.py
+
+      预期输出：
+        [arachne_hardware_mock]: Arachne hardware mock ready
+      验证：另开终端 `ros2 topic list` 应看到 /odom、/joint_states、
+            /arachne/hardware/* 等
+
+    【终端 2】启动 Agent 桥（★两个开关必须都是 true）
+      ros2 launch arachne_agent_bridge agent_bridge.launch.py \
+          motion_enabled:=true confirm_agent_motion:=true
+
+      预期输出（JSON 格式的 ready 事件）：
+        {"kind":"ready","stamp":"...","tools":["get_robot_state",
+         "safe_stop","base_velocity",...]}
+
+    【终端 3】发指令 + 观察
+
+      步骤 1：先确认桥活着，且开关确实打开了
+        ros2 service call /arachne/agent/status std_srvs/srv/Trigger
+        ★ 在返回的 JSON 里确认 "motion_enabled": true
+                              "confirm_agent_motion": true
+
+      步骤 2：先发只读指令，验证链路通
+        ros2 topic pub --once /arachne/agent/command std_msgs/String \
+          '{data: "{\"tool\":\"get_robot_state\"}"}'
+        ★ 回终端 2 看日志，应打印 command_result 事件
+
+      步骤 3：记录当前位置
+        ros2 topic echo /odom --once
+
+      步骤 4：发运动指令（前进 0.1 m/s，持续 1 秒 ≈ 走 10 厘米）
+        ros2 topic pub --once /arachne/agent/command std_msgs/String \
+          '{data: "{\"tool\":\"base_velocity\",\"linear_x\":0.1,
+                    \"duration_sec\":1.0}"}'
+
+      步骤 5：立刻观察 odom 变化
+        ros2 topic echo /odom
+        ★ 应看到 pose.pose.position.x 从 0 增长到约 0.1 后停住
+
+      步骤 6：验证安全停止
+        ros2 service call /arachne/agent/safe_stop std_srvs/srv/Trigger
+
+    ★★ 跑通这 6 步 = 第一个里程碑达成。
+       它证明了：你的 JSON → agent_bridge → /cmd_vel → 假底盘 → /odom
+       这条链路完全打通。剩下的工作就是把「手工发 JSON」换成「LLM 发 JSON」。
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 组合 B：加上你的 Agent（4 个终端）—— 第二个里程碑                    │
+  └─────────────────────────────────────────────────────────────────────┘
+
+    终端 1、2 同组合 A
+
+    【终端 3】监听 Agent 的所有反馈（当作调试窗口）
+      ros2 topic echo /arachne/agent/event
+
+    【终端 4】跑你的 Agent
+      cd ~/mt001_agent && python3 -m agent.main
+      （你的 Agent 内部：订阅 status/tools → 调 LLM → 发 command）
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 组合 C：解锁 base_relative / base_turn（4 个终端）                   │
+  └─────────────────────────────────────────────────────────────────────┘
+
+    终端 1、2 同组合 A
+
+    【终端 3】启动抓取任务服务器（★关键：execute_real 必须是 false）
+      ros2 launch arachne_operator grasp_task_server.launch.py
+
+      ⚠ 先确认它的 execute_real 默认是 False（源码里是 False）。
+        这个节点在 mock 环境下只处理 base_command，
+        不会真的去调用视觉抓取流水线。
+      ⚠ 它可能会因为找不到 YOLO 权重或相机而报警告，
+        只要 base_command 订阅建立了就不影响本项验证。
+
+    【终端 4】测试
+      ros2 topic pub --once /arachne/agent/command std_msgs/String \
+        '{data: "{\"tool\":\"base_relative\",\"distance_m\":0.15}"}'
+
+      观察：ros2 topic echo /arachne/grasp_task/base_state
+            ros2 topic echo /odom
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 组合 D：Gazebo 全仿真 + Agent 接管（3 个终端）—— 第三个里程碑        │
+  └─────────────────────────────────────────────────────────────────────┘
+
+    【终端 1】启动 Gazebo，关掉写死的规划器
+      ros2 launch arachne_demo gazebo_autopick_demo.launch.py \
+          with_autopick:=false
+
+      ★ 如果服务器没有显示器，需要无头模式，见【9.2】
+
+    【终端 2】启动 Agent 桥，★重映射 odom
+      ros2 run arachne_agent_bridge agent_bridge --ros-args \
+          -p motion_enabled:=true \
+          -p confirm_agent_motion:=true \
+          -p odom_topic:=/gz/odom
+
+      ★★ 注意这里用 ros2 run 而不是 ros2 launch，
+         因为 launch 文件没暴露 odom_topic（见 5.8）
+
+    【终端 3】发指令
+      ros2 topic pub --once /arachne/agent/command std_msgs/String \
+        '{data: "{\"tool\":\"base_velocity\",\"linear_x\":0.15,
+                  \"duration_sec\":2.0}"}'
+
+      观察：Gazebo 窗口里机器人真的走起来
+            ros2 topic echo /gz/odom
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 组合 E：最轻量的模型验证（1 个终端，连 mock 都不用）                  │
+  └─────────────────────────────────────────────────────────────────────┘
+
+      ros2 launch arachne_description view_model.launch.py
+    或
+      ./scripts/model/view_model.sh
+
+    只启动 robot_state_publisher + joint_state_publisher_gui + RViz。
+    ★ 用来确认 URDF 模型正确、TF 树完整。
+      需要图形界面（你的 VMware 图形界面坏了，所以这条只能在
+      有显示的环境跑，或者用 X11 转发）。
+
+8.5 真机专用清单（仿真阶段完全不用碰）
+--------------------------------------------------------------------------------
+  · scripts/hardware/ 下全部 29 个脚本
+  · src/arachne_hardware/launch/real_bringup.launch.py
+  · src/arachne_hardware/arachne_hardware/ 下除 hardware_mock.py 外的所有驱动
+    （base_serial_driver、scout_waveshare_serial_driver、
+      gripper_serial_driver、ms42dc_direct_serial_driver、
+      aubo_tcp_driver、aubo_sdk/、aubo_move_joint_action_server）
+  · src/arachne_sensors/ 全部（依赖 /dev/video0 和 /dev/video6）
+  · src/arachne_operator/apriltag_hand_eye_calibrator.py
+  · src/arachne_operator/apriltag_nav_initializer.py
+  · src/arachne_operator/grasp_preview_pipeline.py（依赖真实相机）
+  · src/arachne_operator/real_hardware_acceptance_test.py 的 main
+    （★但其中的 AuboI5Kinematics 类是纯数学，仿真也能用）
+  · src/arachne_nav/launch/nav2_lidar.launch.py
+  · config/real_road_demo_grasp.yaml
+  · third_party/ugv_sdk（CAN/串口协议）
+  · third_party/ms42dc_step_motor_ros2
+
+
+================================================================================
+第九章  ★仿真启动关键信息汇总（README 没写清楚的部分）
+================================================================================
+
+9.1 编译相关
+--------------------------------------------------------------------------------
+  ▪ conda 劫持问题的官方解法
+      scripts/env/arachne_env.sh 会自动从 PATH 和 PYTHONPATH 里剔除
+      .venv / venv / miniconda / anaconda / .conda / .pyenv 路径，
+      并 unset PYTHONHOME 和 VIRTUAL_ENV，设 PYTHONNOUSERSITE=1。
+      ★ 这比手动 grep -v miniconda 更彻底。建议在 AutoDL 上直接用它。
+
+  ▪ 编译依赖链
+      arachne_agent_bridge → 依赖 arachne_operator（导入 AuboI5Kinematics）
+      arachne_demo（Gazebo launch）→ 运行时依赖 arachne_description、
+        aubo_description、scout_description、dh_ag95_description
+        ★★ 这 4 个包必须都编译成功，否则 launch 在计算
+           GZ_SIM_RESOURCE_PATH 时就会抛异常，与是否用 ag95 夹爪无关。
+      arachne_sim → 依赖 arachne_operator（AuboI5Kinematics + grasp_geometry）
+      arachne_gazebo → 依赖 gz-msgs10 / gz-transport13（C++ 编译期依赖）
+
+  ▪ 增量编译
+      改代码后不必全量编译：
+        ./scripts/build/build_selected.sh <包名>
+      Python 包甚至可以用 symlink 安装避免重复编译：
+        colcon build --symlink-install --packages-select arachne_agent_bridge
+
+  ▪ FastDDS 传输设置
+      arachne_env.sh 设了 FASTDDS_BUILTIN_TRANSPORTS=UDPv4。
+      原因（源码注释）：FastDDS 共享内存传输会在 Jetson 上留下陈旧锁文件，
+      导致 lifecycle 服务调用失败。
+      ★ 在服务器上如果遇到「服务调用卡住不返回」，先检查这个环境变量。
+
+  ▪ ROS 发行版自动探测
+      scripts/env/ros_env.sh 会根据 /etc/os-release 的 UBUNTU_CODENAME
+      自动选择：jammy → humble（首选）/ jazzy，noble → jazzy / humble。
+      也可以手动 export ROS_DISTRO=humble 覆盖。
+
+9.2 Gazebo 启动相关
+--------------------------------------------------------------------------------
+  ▪ 必须的系统依赖
+      ros_gz_sim、ros_gz_bridge（Humble 上包名可能是 ros-humble-ros-gz-*）
+      xacro
+      ★ 验证命令：
+        ros2 pkg list | grep ros_gz
+        ros2 pkg prefix ros_gz_sim
+      ★ 若缺失：sudo apt install ros-humble-ros-gz
+
+  ▪ ★★★ Gazebo 版本核实（这可能是你的第一个大坑）
+      源码依赖 gz-msgs10 / gz-transport13，推断为 Gazebo Garden。
+      ⚠ ROS2 Humble 官方配套的是 Gazebo Fortress
+        （gz-msgs9 / gz-transport12），Garden 需要额外的 apt 源。
+        如果版本对不上，arachne_gazebo 这个 C++ 包会编译失败。
+
+      ★ 在服务器上核实：
+        gz sim --version
+        apt list --installed 2>/dev/null | grep -E "gz-(msgs|transport)"
+        ros2 pkg list | grep arachne     ← ★看 arachne_gazebo 在不在
+
+      ★★ 你 CLAUDE.md 里说「已成功编译 11 个包」——但 src 下有 12 个
+        自研包（含 vendor 空壳）。如果没编成功的恰好是 arachne_gazebo，
+        Gazebo 演示就跑不起来（因为 demo_control_bridge 和
+        camera_track_bridge 都在这个包里）。
+        ★★★ 建议第一件事就是核实这一点。
+
+  ▪ 无头（headless）运行
+      ⚠ README 和所有 launch 文件都【没有】提供无头模式参数。
+      默认 gz_args = "-r -v 1 -z 180 --render-engine ogre2
+                      --render-engine-api-backend opengl <world>"
+      要无头运行需要手动覆盖整个 gz_args：
+        # 先拿到 world 的绝对路径
+        WORLD=$(ros2 pkg prefix arachne_demo)/share/arachne_demo/worlds/arachne_showroom.sdf
+        ros2 launch arachne_demo gazebo_autopick_demo.launch.py \
+          gz_args:="-r -s -v 1 -z 180 $WORLD" \
+          with_camera_tracking:=false
+      其中 -s = server only（不起 GUI）
+      ⚠ 无头时相机跟随失去意义，所以同时关掉 with_camera_tracking
+
+  ▪ 软件渲染（无 GPU 时）
+      export LIBGL_ALWAYS_SOFTWARE=1
+      ⚠ 会非常慢（180Hz 物理步进 + 软渲染基本跑不动）
+      ★ AutoDL 有 RTX 3080 Ti，应该能硬件渲染，但需要确认
+        显卡驱动和 OpenGL 可用：
+          nvidia-smi
+          glxinfo | grep "OpenGL renderer"
+        （glxinfo 需 apt install mesa-utils）
+      ★ AutoDL 这类云服务器通常没有物理显示器，
+        大概率需要走无头模式 + 虚拟显示（xvfb）。
+
+  ▪ WSL 特殊处理
+      scripts/sim/*.sh 里有 WSL 检测逻辑，会设置
+      LD_LIBRARY_PATH=/usr/lib/wsl/lib、GALLIUM_DRIVER=d3d12、
+      MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA。
+      ★ 说明作者主要在 WSL 上开发。AutoDL 是原生 Linux，不触发这段。
+
+  ▪ 场景与规划器坐标必须一致
+      autopick 规划器的 8 个障碍物坐标是从 arachne_showroom.sdf
+      手工抄写的。★如果你修改 world 文件加物体，规划器不会知道。
+      → 你的 Agent 不受此限（因为你会重新设计世界模型），
+        但如果你还想让 autopick 能跑（当对照组），改 world 时要同步改
+        gazebo_autopick_planner.py 的 _known_obstacles()。
+
+9.3 ★★★ 仿真环境的能力缺口（对你的 Agent 影响最大）
+--------------------------------------------------------------------------------
+
+  【缺口一】Gazebo 没有相机
+      原因：gazebo_autopick_demo 的 URDF 映射写死 with_ee_camera:="false"，
+            且 ros_gz_bridge 没桥接任何图像话题。
+      影响：Agent 在 Gazebo 里拿不到任何视觉输入。
+      解法：
+        ① 改 launch 里的 xacro 映射为 with_ee_camera:="true"
+           （要改 Arachne 的代码，你没有推送权限，但可以在本地改后
+             不提交，或者在你自己的 launch 文件里重新组装）
+        ② 在 ros_gz_bridge 参数里加上图像话题桥接
+        ③ ★推荐：在你的 mt001_agent 里写自己的 launch 文件，
+           复制 gazebo_autopick_demo 的结构但改这两处。
+           这样完全不动 Arachne 仓库。
+      ⚠ 但即使加了相机，URDF 里的相机 link 是否配了 gz-sim 的
+        sensor 插件还需要核实（在 urdf/sensors/ 下检查是否有
+        <sensor type="depth_camera"> 之类的定义）。
+
+  【缺口二】Gazebo 没有 /joint_states
+      原因：ros_gz_bridge 没桥接。
+      影响：agent_bridge 的机械臂工具直接失效；
+            任何需要关节反馈的闭环控制都做不了。
+      解法：在你自己的 launch 里给 bridge 加一条 joint_state 桥接。
+            ⚠ 具体 gz 话题名需要在 Gazebo 运行时用 `gz topic -l` 查确认，
+              通常形如 /world/arachne_showroom/model/arachne/joint_state
+
+  【缺口三】Gazebo 没有 TF
+      影响：RViz 里看不到机器人正确位姿；任何坐标变换都要自己算。
+      解法：起一个 robot_state_publisher（喂同样的 URDF），
+            或桥接 /model/arachne/pose
+
+  【缺口四】Gazebo 没有激光雷达
+      URDF 里 with_lidar:="true"（有雷达模型），但桥没接雷达数据。
+      影响：做不了 SLAM、做不了动态避障。
+      ★ 但 autopick 用的是「已知障碍物列表」，所以它不需要雷达。
+        你的 Agent 如果也用已知世界模型，同样不需要。
+
+  ★★★ 综合建议：
+     这四个缺口说明【当前 Gazebo 环境是为 autopick 这一个演示定制的
+     最小可用环境】，不是通用仿真平台。
+     你有两个选择：
+       A. 接受现状，Agent 用「上帝视角」世界模型（从 world 文件解析
+          物体列表，或直接硬编码），把精力放在决策层。
+          ★ 两个月项目推荐这条。诚实地在文档里写明这是简化假设。
+       B. 自己在 mt001_agent 里重建一套完整的 Gazebo launch，
+          补齐相机、joint_states、TF、雷达四条桥接。
+          ★ 工作量约 1-2 周，但会让你的项目更有分量。
+          ★ 如果时间允许，值得做——这本身就是可写进 README 的贡献。
+
+9.4 排错速查
+--------------------------------------------------------------------------------
+  症状                                    → 检查
+  ────────────────────────────────────────────────────────────────
+  colcon build 报 No module named          → source scripts/env/
+    'catkin_pkg'                             arachne_env.sh（conda 劫持）
+  arachne_gazebo 编译失败，找不到           → Gazebo 版本不匹配。
+    gz-msgs10 / gz-transport13               需要 Garden 而非 Fortress
+  launch 报 PackageNotFoundError           → 对应包没编译成功，
+    aubo_description 等                      检查 ros2 pkg list | grep arachne
+  agent_bridge 报 requires                 → 忘了 motion_enabled:=true
+    motion_enabled:=true                     和 confirm_agent_motion:=true
+  agent_bridge 报 no complete Aubo         → 没有 /joint_states 数据源
+    joint state                              （Gazebo 下必然如此）
+  agent_bridge 报 Aubo joint state is      → 状态源停了，或超过 2 秒没更新
+    stale: X.XXs
+  发了 base_velocity 但 odom 不变           → ① 检查 odom 话题名
+                                              （/odom vs /gz/odom）
+                                            ② ros2 topic echo /cmd_vel
+                                              看指令是否发出
+                                            ③ 检查执行层是否在跑
+  base_relative 返回 ok 但没动               → grasp_task_server 没启动
+                                            （静默失败，见 8.2）
+  arm_joint_jog 返回 ok 但没动（mock）      → mock 不订阅
+                                            joint_velocity_command
+                                            （静默失败，见 8.2）
+  ROS 服务调用卡住不返回                     → 检查 FASTDDS_BUILTIN_
+                                            TRANSPORTS=UDPv4
+  Gazebo 启动后黑屏/崩溃                     → 检查 gz sim --version
+                                            检查 nvidia-smi 和 OpenGL
+                                            无显示器则改无头模式（见 9.2）
+
+
+================================================================================
+第十章  third_party/ 概览
+================================================================================
+
+  ┌──────────────────────┬──────────────┬────────┬─────────────────────┐
+  │ 子包                  │ 对应硬件      │ 仿真需要│ 说明                 │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ aubo_description     │ Aubo i5 机械臂│ ★必须  │ URDF + 网格模型。    │
+  │                      │              │        │ Gazebo launch 无条件 │
+  │                      │              │        │ 引用其路径            │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ aubo_ros2_driver     │ Aubo i5 机械臂│ 否     │ 官方 ROS2 驱动，含   │
+  │                      │              │        │ aubo_gazebo、        │
+  │                      │              │        │ aubo_moveit_config、 │
+  │                      │              │        │ aubo_msgs、          │
+  │                      │              │        │ aubo_dashboard_msgs、│
+  │                      │              │        │ ros_joints_plan。     │
+  │                      │              │        │ real_bringup 里由    │
+  │                      │              │        │ use_aubo_ros2_driver │
+  │                      │              │        │ 控制（默认 false，   │
+  │                      │              │        │ 说明用的是自写驱动）  │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ scout_ros2           │ Scout 2.0 底盘│ ★必须  │ 含 scout_base（驱动）│
+  │                      │              │        │ scout_description    │
+  │                      │              │        │ （★URDF，仿真需要）  │
+  │                      │              │        │ scout_msgs（自定义   │
+  │                      │              │        │ 消息）               │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ scout_ros            │ Scout 2.0 底盘│ 否     │ ROS1 遗留版本，      │
+  │                      │              │        │ 不参与 ROS2 编译      │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ ugv_sdk              │ 松灵全系底盘  │ 否     │ Weston Robot 的 C++  │
+  │                      │              │        │ SDK。CAN 总线与串口   │
+  │                      │              │        │ 协议实现（protocol_v1│
+  │                      │              │        │ / v2）。含 scout、    │
+  │                      │              │        │ hunter、ranger、     │
+  │                      │              │        │ bunker、tracer 五种   │
+  │                      │              │        │ 车型的 demo。         │
+  │                      │              │        │ ★纯真机通信层         │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ dh_ag95_gripper_ros2 │ DH AG95 夹爪  │ ★必须  │ 备选夹爪。含         │
+  │                      │ （备选）      │ （路径） │ dh_ag95_description  │
+  │                      │              │        │ （★URDF）和          │
+  │                      │              │        │ dh_gripper_driver。   │
+  │                      │              │        │ ★★即使用 ms42dc，    │
+  │                      │              │        │ Gazebo launch 也无   │
+  │                      │              │        │ 条件引用它的路径      │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ ms42dc_step_motor_   │ MS42DC 夹爪   │ 否     │ 步进电机 ROS2 驱动   │
+  │ ros2                 │              │        │ （Step_Motor_ROS2）  │
+  │                      │              │        │ ★纯真机串口通信       │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ MS42DC_SPLIT         │ MS42DC 夹爪   │ 间接   │ 4 个 STL 拆件：      │
+  │                      │              │        │ base / mid /         │
+  │                      │              │        │ left_finger /        │
+  │                      │              │        │ right_finger。       │
+  │                      │              │        │ 被 arachne_          │
+  │                      │              │        │ description 引用      │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ MS42DC.step          │ MS42DC 夹爪   │ 否     │ 原始 CAD 文件        │
+  │                      │              │        │ （STEP 格式）        │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ LARA_AUBOi5_AG95     │ Aubo+AG95 组合│ 否     │ 另一套机器人组合的    │
+  │                      │              │        │ 模型资产（参考用）    │
+  ├──────────────────────┼──────────────┼────────┼─────────────────────┤
+  │ kenney               │ 无            │ 否     │ Kenney 免费素材，     │
+  │                      │              │        │ 给 Godot 展示用       │
+  └──────────────────────┴──────────────┴────────┴─────────────────────┘
+
+  ★ 获取方式：scripts/hardware/fetch_third_party.sh
+  ★ third_party/ 下有 README.md 和 README.zh-CN.md，可查各包来源。
+
+  ★★ 仿真最小依赖集（这 4 个必须存在且编译成功）：
+       aubo_description
+       scout_ros2/scout_description
+       dh_ag95_gripper_ros2/dh_ag95_description
+       MS42DC_SPLIT（STL 文件，不需编译但要在正确路径）
+
+
+================================================================================
+第十一章  阅读优先级总表
+================================================================================
+
+  ┌────┬────────────────────────────────────────┬────────┬────────────┐
+  │优先│ 路径                                    │ 相关度 │ 为什么      │
+  ├────┼────────────────────────────────────────┼────────┼────────────┤
+  │ P0 │ src/arachne_agent_bridge/               │ 极高   │ 你的正门    │
+  │ P0 │ config/agent/tools.yaml + agent.example │ 极高   │ 工具契约    │
+  │ P0 │ src/arachne_hardware/hardware_mock.py   │ 极高   │ 第一里程碑  │
+  │ P0 │ src/arachne_hardware/launch/mock_       │ 极高   │ 第一里程碑  │
+  │    │   bringup.launch.py                     │        │            │
+  │ P0 │ src/arachne_demo/launch/gazebo_autopick │ 极高   │ 仿真主入口  │
+  │    │   _demo.launch.py                       │        │            │
+  │ P0 │ src/arachne_demo/arachne_demo/gazebo_   │ 极高   │ 你的替换靶子│
+  │    │   autopick_planner.py                   │        │            │
+  │ P0 │ AGENTS.md                               │ 高     │ 安全红线    │
+  │ P0 │ scripts/env/arachne_env.sh              │ 高     │ 环境准备    │
+  ├────┼────────────────────────────────────────┼────────┼────────────┤
+  │ P1 │ src/arachne_gazebo/src/gazebo_demo_     │ 高     │ Gazebo 控制 │
+  │    │   control_bridge.cpp                    │        │ 的关键通路  │
+  │ P1 │ src/arachne_description/urdf/gazebo/    │ 高     │ 仿真插件配置│
+  │    │   arachne_gazebo_plugins.xacro          │        │            │
+  │ P1 │ src/arachne_demo/worlds/arachne_        │ 高     │ 场景素材    │
+  │    │   showroom.sdf                          │        │            │
+  │ P1 │ src/arachne_operator/grasp_task_server  │ 高     │ 高层路线靶子│
+  │    │   .py（只读服务与 base_command 部分）    │        │            │
+  │ P1 │ src/arachne_sim/urban_trash_sorting_    │ 高     │ 最完整的    │
+  │    │   demo.py                               │        │ baseline    │
+  │ P1 │ docs/step_demo_plan.md                  │ 高     │ 痛点分析    │
+  │ P1 │ src/arachne_operator/action_chunk_      │ 高     │ 另一条 AI   │
+  │    │   translator.py                         │        │ 接入路径    │
+  │ P1 │ README.md                               │ 中     │ 官方说法    │
+  │ P1 │ scripts/sim/ + scripts/build/           │ 中     │ 启动方式    │
+  ├────┼────────────────────────────────────────┼────────┼────────────┤
+  │ P2 │ src/arachne_operator/sequence_executor  │ 中     │ 非 LLM 编排 │
+  │    │   .py                                   │        │ 对照        │
+  │ P2 │ src/arachne_operator/real_hardware_     │ 中     │ 运动学工具  │
+  │    │   acceptance_test.py（AuboI5Kinematics）│        │ 可复用      │
+  │ P2 │ src/arachne_hardware/safety_state_      │ 中     │ 安全语义    │
+  │    │   machine.py                            │        │            │
+  │ P2 │ src/arachne_nav/                        │ 中     │ 导航能力边界│
+  │ P2 │ src/arachne_moveit_config/              │ 中     │ 规划配置    │
+  │ P2 │ src/arachne_sensors/                    │ 中     │ 感知接口形状│
+  │ P2 │ scripts/remote/                         │ 中     │ 远程算力架构│
+  │ P2 │ recordings/teach/                       │ 中     │ 专家演示数据│
+  │ P2 │ yolo_workspace/                         │ 中     │ 现有感知能力│
+  ├────┼────────────────────────────────────────┼────────┼────────────┤
+  │ P3 │ src/arachne_operator/grasp_preview_     │ 低     │ 6339 行，   │
+  │    │   pipeline.py                           │        │ 真机视觉，   │
+  │    │                                         │        │ 仿真用不到   │
+  │ P3 │ src/arachne_operator/teach_panel.py     │ 低     │ 5597 行 GUI │
+  │ P3 │ src/arachne_control/                    │ 低     │ 未实际启用   │
+  │ P3 │ godot/                                  │ 低     │ 与 ROS 无连接│
+  │ P3 │ scripts/hardware/                       │ 低     │ 全真机      │
+  │ P3 │ third_party/ugv_sdk、ms42dc_step_motor  │ 低     │ 硬件协议层   │
+  │ P3 │ .github/、.vscode/、src/vendor/          │ 低     │ 无关        │
+  └────┴────────────────────────────────────────┴────────┴────────────┘
+
+
+================================================================================
+第十二章  给 mt 的行动建议（基于以上全部分析）
+================================================================================
+
+  ▪ 立刻做（本周）
+    1. 在 AutoDL 上核实：ros2 pkg list | grep arachne
+       确认 arachne_gazebo 在不在（它依赖特定 Gazebo 版本，最可能编译失败；
+       而 Gazebo 演示的两个关键桥接节点都在这个包里）
+    2. 核实 Gazebo 版本：gz sim --version
+    3. 跑通【8.4 组合 A】的 6 个步骤 —— 这是你的第一个里程碑
+    4. 试着改用 source scripts/env/arachne_env.sh 替代你现在的三条命令
+
+  ▪ 接着做（下周）
+    5. 把【组合 A】的手工发指令过程，用 Python 脚本封装成
+       mt001_agent/scripts/send_command.py（订阅 status + 发 command）
+    6. 在此基础上接入 LLM，形成最小可用 Agent（组合 B）
+    7. 尝试跑通 Gazebo（组合 D），确认 odom 重映射方案有效
+
+  ▪ 架构决策建议
+    · 你的 Agent 做成独立 Python 进程（用 rclpy 收发话题），
+      不必做成 ROS 包 —— 这符合作者的设计意图
+    · 世界模型先用「上帝视角」（从 SDF 解析或硬编码），
+      在架构上留好感知接口，诚实地在文档标注这是简化
+    · 底盘走 agent_bridge（白拿安全机制），
+      机械臂走 /arachne/gui_joint_states（Gazebo 下唯一可行路径）
+    · 把「失败恢复」做成核心卖点 —— 这是 autopick 和
+      step_cleanup_demo 共同的短板，也是 LLM 最能发挥的地方
+    · 把 urban_trash_sorting_demo 作为 baseline 对照组写进 README
+    · 场景任务可以直接用 showroom 里现成但没人用的素材：
+      绕桩行驶（3 个 slalom marker）、桌面操作（work_table + 2 个泡沫块）
+
+  ▪ 要避开的坑
+    · 别假设 agent_bridge 返回 ok:true 就等于机器人动了（见 8.2）
+    · 别在 Gazebo 下用 arm_cartesian_jog / arm_joint_jog（必然失败）
+    · 别忘了 odom 话题名在仿真和真机不一致
+    · 别调用 aubo_teach 工具（安全风险，建议从工具清单里删掉）
+    · 别改 Arachne 仓库的文件（你没推送权限，且之前误删过）
+    · 你的所有产出放 mt001_agent/，不要放 Arachne/
+
+================================================================================
+                              文档结束
+================================================================================
